@@ -1,14 +1,10 @@
 package humble.model
 
-import org.springframework.stereotype.{ Repository => DAOService, Component => WiredSpringObject }
-import org.springframework.transaction.annotation.Transactional
-import javax.persistence.{ Column, Entity, Id, GeneratedValue, Table, UniqueConstraint }
+import javax.persistence.{ Column, Entity, Id, GeneratedValue, Table }
 import humble.framework.{ Model, ActiveRecord }
 
 @Entity
 @Table(name = "TESTE")
-@WiredSpringObject
-@Transactional(readOnly = false)
 class Teste extends Model {
 
   @Id
@@ -21,5 +17,4 @@ class Teste extends Model {
 
 }
 
-@DAOService
 object Teste extends ActiveRecord[Teste]

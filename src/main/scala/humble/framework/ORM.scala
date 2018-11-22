@@ -11,32 +11,47 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.orm.jpa.{ LocalContainerEntityManagerFactoryBean, JpaTransactionManager }
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter
 import org.springframework.transaction.annotation.{ Transactional, EnableTransactionManagement }
+import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 
 abstract class Model extends Serializable {
-
-  def criar = SpringContext.entityManager.persist(this)
-
+  def salvar = SpringContext.dao.criar(this)
+  def qualClasse = this.getClass.getSimpleName
 }
 
 abstract class ActiveRecord[M <: Model](implicit tag: ClassTag[M]) {
+  def listarTodos: List[M] = SpringContext.dao.listarTodos(tag.runtimeClass).asInstanceOf[JList[M]].asScala.toList
+}
+
+@DAO
+class HumbleDAO {
+
+  @PersistenceContext
+  var entityManager: EntityManager = _
+
+  @Transactional(readOnly = false)
+  def criar(instancia: Any) = this.entityManager.persist(instancia)
+
+  @Transactional(readOnly = false)
+  def atualizar(instancia: Any) = this.entityManager.merge(instancia)
 
   @Transactional(readOnly = true)
-  def listarTodos: List[M] =
-    SpringContext.entityManager.createQuery(s"FROM ${tag.runtimeClass}")
-      .getResultList.asInstanceOf[JList[M]].asScala.toList
+  def listarTodos(classe: Class[_]): JList[_] = this.entityManager.createQuery(s"FROM ${classe.getSimpleName}").getResultList
+
+  @Transactional(readOnly = true)
+  def contarTodos(classe: Class[_]): Long = this.entityManager.createQuery(s"SELECT COUNT(t) FROM ${classe.getSimpleName} t").getSingleResult.asInstanceOf[Long]
 
 }
 
 object SpringContext {
 
   lazy val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpring])
-  lazy val entityManager = contexto.getBean(classOf[EntityManager])
+  lazy val dao = SpringContext.contexto.getBean(classOf[HumbleDAO])
 
 }
 
 @Configuration
-@EnableTransactionManagement
+@EnableTransactionManagement //(proxyTargetClass = true)
 @ComponentScan(Array("humble.*"))
 @EnableJpaRepositories(Array("humble"))
 class ConfiguracaoSpring {
