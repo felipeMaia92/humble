@@ -2,11 +2,13 @@ package humble.model
 
 import java.lang.{ Long => JLong }
 import javax.persistence.{ Column, Entity, Id, GeneratedValue, Table }
-import humble.framework.{ Model, ActiveRecord }
+import humble.framework.{ ActiveRecordModel, ActiveRecordCompanion }
+
+object Teste extends ActiveRecordCompanion[Teste]
 
 @Entity
 @Table(name = "TESTE")
-class Teste extends Model[JLong] {
+class Teste extends ActiveRecordModel[JLong] {
 
   @Id
   @GeneratedValue
@@ -17,5 +19,3 @@ class Teste extends Model[JLong] {
   var descricao: String = _
 
 }
-
-object Teste extends ActiveRecord[Teste]

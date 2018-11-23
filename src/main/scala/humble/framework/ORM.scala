@@ -17,18 +17,25 @@ import org.springframework.transaction.annotation.{ Transactional, EnableTransac
 import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 
-abstract class Model[PK <: JSerial] extends Serializable {
-  def salvar = SpringContext.dao.criar(this)
+abstract class ActiveRecordModel[PK <: JSerial](implicit tag: ClassTag[PK]) extends Serializable {
   
-  lazy val annotationIdJPA = classOf[javax.persistence.Id]
-  val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
+  def salvar =
+    this.primaryKey match {
+      case Some(pk) => SpringContext.dao.atualizar(this)
+      case None => SpringContext.dao.criar(this)
+    }
   
+  def apagar = SpringContext.dao.apagar(this)
+  
+  private val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
+
+  private lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
   private def buscarPKNoAtributo(posicao: Int): List[JAttribute] = {
     val annotations = atributos(posicao).getDeclaredAnnotations.toList
     annotations.takeWhile(_.annotationType.equals(classOf[javax.persistence.Id]))
       .map(
         _.annotationType match {
-          case annotationIdJPA => this.atributos(posicao)
+          case CONST_ANNOTATION_ID_JPA => this.atributos(posicao)
           case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
             case Success(annotation) => annotation.asInstanceOf[JAttribute]
             case Failure(ex) => throw new IllegalAccessException
@@ -36,6 +43,8 @@ abstract class Model[PK <: JSerial] extends Serializable {
         }
       )
   }
+  
+  def primaryKeyClass: Class[_] = tag.runtimeClass
   
   def primaryKey: Option[PK] = {
     val pk = this.buscarPKNoAtributo(0).head
@@ -48,8 +57,13 @@ abstract class Model[PK <: JSerial] extends Serializable {
   
 }
 
-abstract class ActiveRecord[M <: Model[_]](implicit tag: ClassTag[M]) {
+abstract class ActiveRecordCompanion[M <: ActiveRecordModel[_]](implicit tag: ClassTag[M]) {
   def listarTodos: List[M] = SpringContext.dao.listarTodos(tag.runtimeClass).asInstanceOf[JList[M]].asScala.toList
+  def contarTodos: Long = SpringContext.dao.contarTodos(tag.runtimeClass)
+  def buscarPorPK(pk: Any): Option[M] = Try(SpringContext.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]) match {
+    case Success(instancia) => Option(instancia)
+    case Failure(ex) => None
+  }
 }
 
 @DAO
@@ -63,12 +77,18 @@ class HumbleDAO {
 
   @Transactional(readOnly = false)
   def atualizar(instancia: Any) = this.entityManager.merge(instancia)
+  
+  @Transactional(readOnly = false)
+  def apagar(instancia: Any) = this.entityManager.remove(this.entityManager.merge(instancia))
 
   @Transactional(readOnly = true)
   def listarTodos(classe: Class[_]): JList[_] = this.entityManager.createQuery(s"FROM ${classe.getSimpleName}").getResultList
 
   @Transactional(readOnly = true)
   def contarTodos(classe: Class[_]): Long = this.entityManager.createQuery(s"SELECT COUNT(t) FROM ${classe.getSimpleName} t").getSingleResult.asInstanceOf[Long]
+  
+  @Transactional(readOnly = true)
+  def buscarPorPK(classe: Class[_], pk: Any): Any = this.entityManager.find(classe, pk)
 
 }
 
