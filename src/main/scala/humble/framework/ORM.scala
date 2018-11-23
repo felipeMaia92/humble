@@ -1,6 +1,9 @@
 package humble.framework
 
 import scala.reflect.ClassTag
+import scala.util.{ Try, Success, Failure }
+import java.lang.reflect.{ Field => JAttribute }
+import java.io.{ Serializable => JSerial }
 import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties }
 import javax.persistence.{ PersistenceContext, EntityManager, EntityManagerFactory, Transient }
 import javax.sql.DataSource
@@ -14,12 +17,38 @@ import org.springframework.transaction.annotation.{ Transactional, EnableTransac
 import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 
-abstract class Model extends Serializable {
+abstract class Model[PK <: JSerial] extends Serializable {
   def salvar = SpringContext.dao.criar(this)
-  def qualClasse = this.getClass.getSimpleName
+  
+  lazy val annotationIdJPA = classOf[javax.persistence.Id]
+  val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
+  
+  private def buscarPKNoAtributo(posicao: Int): List[JAttribute] = {
+    val annotations = atributos(posicao).getDeclaredAnnotations.toList
+    annotations.takeWhile(_.annotationType.equals(classOf[javax.persistence.Id]))
+      .map(
+        _.annotationType match {
+          case annotationIdJPA => this.atributos(posicao)
+          case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
+            case Success(annotation) => annotation.asInstanceOf[JAttribute]
+            case Failure(ex) => throw new IllegalAccessException
+          }
+        }
+      )
+  }
+  
+  def primaryKey: Option[PK] = {
+    val pk = this.buscarPKNoAtributo(0).head
+    pk.setAccessible(true)
+    Try(pk.get(this)) match {
+      case Success(valor) => Option(valor.asInstanceOf[PK])
+      case Failure(ex) => None
+    }
+  }
+  
 }
 
-abstract class ActiveRecord[M <: Model](implicit tag: ClassTag[M]) {
+abstract class ActiveRecord[M <: Model[_]](implicit tag: ClassTag[M]) {
   def listarTodos: List[M] = SpringContext.dao.listarTodos(tag.runtimeClass).asInstanceOf[JList[M]].asScala.toList
 }
 
@@ -51,7 +80,7 @@ object SpringContext {
 }
 
 @Configuration
-@EnableTransactionManagement //(proxyTargetClass = true)
+@EnableTransactionManagement
 @ComponentScan(Array("humble.*"))
 @EnableJpaRepositories(Array("humble"))
 class ConfiguracaoSpring {
