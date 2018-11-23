@@ -3,6 +3,7 @@ package humble.framework
 import java.io.{ IOException, InputStream, OutputStream, ByteArrayOutputStream }
 import java.util.{ List => JList, ArrayList => JArrayList, ArrayDeque => JArrayDeque, LinkedList => JLinkedList }
 import java.net.InetSocketAddress
+import scala.collection.JavaConverters._
 import scala.util.{ Try, Success, Failure }
 import org.apache.log4j.Logger
 import org.apache.mina.core.service.IoHandler
@@ -47,7 +48,7 @@ class Servidor(
   def parar = {
     if(!iniciado) throw new IOException("Servidor não está rodando.")
     this.acceptor.unbind
-    this.conexoes.forEach(_.fechar)
+    this.conexoes.asScala.map(_.fechar)
     this.conexoes.clear
     this.acceptor.dispose
     this.eventExecutor.shutdown
@@ -83,20 +84,20 @@ class Servidor(
       }
     }
     streamEntradaSessao.append(buffer)
-    this.listeners.forEach(_.mensagemRecebida(sessaoClient, streamEntradaSessao))
+    this.listeners.asScala.map(_.mensagemRecebida(sessaoClient, streamEntradaSessao))
     sessaoClient.mensagemRecebida(streamEntradaSessao)
     // TODO PORRA, MAIS UMA CLASSE VSF
   }
 
   def messageSent(sessao: IoSession, mensagem: Any) = {
     val sessaoClient = this.recuperarInstanciaClientSessao(sessao)
-    this.listeners.forEach(_.mensagemEnviada(sessaoClient))
+    this.listeners.asScala.map(_.mensagemEnviada(sessaoClient))
     sessaoClient.mensagemEnviada
   }
 
   def sessionClosed(sessao: IoSession) = {
     val sessaoClient = this.recuperarInstanciaClientSessao(sessao)
-    this.listeners.forEach(_.conexaoFechada(sessaoClient))
+    this.listeners.asScala.map(_.conexaoFechada(sessaoClient))
     sessaoClient.sessaoFechada
     this.conexoes.remove(sessaoClient)
   }
@@ -104,19 +105,19 @@ class Servidor(
   def sessionCreated(sessao: IoSession) = {
     val sessaoClient = this.recuperarInstanciaClientSessao(sessao)
     this.conexoes.add(sessaoClient)
-    this.listeners.forEach(_.conexaoCriada(sessaoClient))
+    this.listeners.asScala.map(_.conexaoCriada(sessaoClient))
     sessaoClient.sessaoCriada
   }
 
   def sessionIdle(sessao: IoSession, status: IdleStatus) = {
     val sessaoClient = this.recuperarInstanciaClientSessao(sessao)
-    this.listeners.forEach(_.conexaoOciosa(sessaoClient))
+    this.listeners.asScala.map(_.conexaoOciosa(sessaoClient))
     sessaoClient.sessaoOciosa
   }
 
   def sessionOpened(sessao: IoSession) = {
     val sessaoClient = this.recuperarInstanciaClientSessao(sessao)
-    this.listeners.forEach(_.conexaoAberta(sessaoClient))
+    this.listeners.asScala.map(_.conexaoAberta(sessaoClient))
     sessaoClient.sessaoAberta
   }
 
@@ -151,12 +152,12 @@ class SessaoClient {
   def getStreamSaida: OutputStream = if(fechada) throw new java.nio.channels.ClosedChannelException else streamSaida
   def getEnderecoClient: java.net.InetAddress = this.sessao.getRemoteAddress.asInstanceOf[InetSocketAddress].getAddress
 
-  def sessaoAberta = this.listeners.forEach(_.conexaoAberta(this))
-  def sessaoCriada = this.listeners.forEach(_.conexaoCriada(this))
-  def sessaoFechada = this.listeners.forEach(_.conexaoFechada(this))
-  def sessaoOciosa = this.listeners.forEach(_.conexaoOciosa(this))
-  def mensagemRecebida(in: InputStream) = this.listeners.forEach(_.mensagemRecebida(this, in))
-  def mensagemEnviada = this.listeners.forEach(_.mensagemEnviada(this))
+  def sessaoAberta = this.listeners.asScala.map(_.conexaoAberta(this))
+  def sessaoCriada = this.listeners.asScala.map(_.conexaoCriada(this))
+  def sessaoFechada = this.listeners.asScala.map(_.conexaoFechada(this))
+  def sessaoOciosa = this.listeners.asScala.map(_.conexaoOciosa(this))
+  def mensagemRecebida(in: InputStream) = this.listeners.asScala.map(_.mensagemRecebida(this, in))
+  def mensagemEnviada = this.listeners.asScala.map(_.mensagemEnviada(this))
 
   def removerTodosListenersConexao = this.listeners.clear
   def removerListenerConexao(listener: ListenerConexao) = this.listeners.remove(listener)

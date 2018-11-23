@@ -17,7 +17,7 @@ import org.springframework.transaction.annotation.{ Transactional, EnableTransac
 import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 
-abstract class ActiveRecordModel[PK <: JSerial](implicit tag: ClassTag[PK]) extends Serializable {
+abstract class ActiveRecordModel[PK <: JSerial](implicit @transient tag: ClassTag[PK]) extends Serializable {
   
   def salvar =
     this.primaryKey match {
@@ -27,9 +27,9 @@ abstract class ActiveRecordModel[PK <: JSerial](implicit tag: ClassTag[PK]) exte
   
   def apagar = SpringContext.dao.apagar(this)
   
-  private val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
-
-  private lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
+  @transient private val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
+  @transient private lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
+  
   private def buscarPKNoAtributo(posicao: Int): List[JAttribute] = {
     val annotations = atributos(posicao).getDeclaredAnnotations.toList
     annotations.takeWhile(_.annotationType.equals(classOf[javax.persistence.Id]))
@@ -54,6 +54,8 @@ abstract class ActiveRecordModel[PK <: JSerial](implicit tag: ClassTag[PK]) exte
       case Failure(ex) => None
     }
   }
+  
+  def json: String = SpringContext.gson.toJson(this)
   
 }
 
@@ -93,10 +95,13 @@ class HumbleDAO {
 }
 
 object SpringContext {
-
   lazy val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpring])
   lazy val dao = SpringContext.contexto.getBean(classOf[HumbleDAO])
-
+  lazy val gson = new com.google.gson.GsonBuilder()
+                        .disableHtmlEscaping
+                        .setDateFormat("dd/MM/yyyy HH:mm:ss")
+                        .setPrettyPrinting
+                        .create
 }
 
 @Configuration
