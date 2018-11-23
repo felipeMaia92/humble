@@ -1,6 +1,7 @@
 package humble.framework
 
 import scala.reflect.ClassTag
+import annotation.meta.param
 import scala.util.{ Try, Success, Failure }
 import java.lang.reflect.{ Field => JAttribute }
 import java.io.{ Serializable => JSerial }
@@ -17,7 +18,7 @@ import org.springframework.transaction.annotation.{ Transactional, EnableTransac
 import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 
-abstract class ActiveRecordModel[PK <: JSerial](implicit @transient tag: ClassTag[PK]) extends Serializable {
+abstract class ActiveRecordModel[PK <: JSerial](implicit @(transient @param) tag: ClassTag[PK]) extends Serializable {
   
   def salvar =
     this.primaryKey match {

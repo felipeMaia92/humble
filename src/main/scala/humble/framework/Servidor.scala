@@ -1,6 +1,7 @@
 package humble.framework
 
-import java.io.{ IOException, InputStream, OutputStream, ByteArrayOutputStream }
+import java.lang.{ Math => JMath }
+import java.io.{ IOException, EOFException, InputStream, OutputStream, ByteArrayOutputStream }
 import java.util.{ List => JList, ArrayList => JArrayList, ArrayDeque => JArrayDeque, LinkedList => JLinkedList }
 import java.net.InetSocketAddress
 import scala.collection.JavaConverters._
@@ -169,7 +170,7 @@ class SessaoClient {
     this.streamSaida.close
     Try(this.sessao.close(false).await) match {
       case Success(fechamentoSessao) => Unit
-      case Failure(ex) => Unit // java.lang.InterruptedException
+      case Failure(ex) => Unit // FIXME java.lang.InterruptedException
     }
     this.fechada = true
   }
@@ -178,16 +179,37 @@ class SessaoClient {
 
 class StreamEntrada(
   data: JArrayDeque[IoBuffer] = new JArrayDeque[IoBuffer],
-  resetCache: JLinkedList[IoBuffer] = null,
-  marcado: Boolean = false
+  var resetCache: JLinkedList[IoBuffer] = null,
+  var marcado: Boolean = false
 ) extends InputStream {
 
   def read: Int = {
-    1
+    this.available match  {
+      case 0 => throw new EOFException("Sem dados disponíveis")
+      case _ => {
+        val saida = this.data.getFirst.get
+        this.atualizarListaBuffer
+        saida
+      }
+    }
   }
-
+  
+  override def read(b: Array[Byte], off: Int, len: Int): Int = {
+    var saida = 0
+    var temp = 0
+    do {
+      temp = this.lerTamanhoPedaco(len - saida)
+      this.data.getFirst.get(b, off + saida, temp)
+      saida += temp
+      this.atualizarListaBuffer
+    } while(temp > 0)
+    saida
+  }
+  
+  override def available: Int = this.data.asScala.map( _.remaining).sum
   def append(buffer: IoBuffer) = {
     this.data.offerLast(buffer)
+    this.atualizarListaBuffer
   }
 
   private def atualizarListaBuffer: Boolean = {
@@ -201,10 +223,69 @@ class StreamEntrada(
         else buff.free
         this.atualizarListaBuffer
       }
-      case (_, _) => !this.data.isEmpty
+      case (_,_) => !this.data.isEmpty
     }
   }
-
+  
+  override def close = {
+    this.data.asScala.map(_.free)
+    this.data.clear
+    this.close
+  }
+  
+  private def primeiroDisponivel = if(this.data.isEmpty) 0 else this.data.getFirst.remaining
+  private def lerTamanhoPedaco(desejado: Int) = JMath.min(this.primeiroDisponivel, desejado)
+  
+  override def skip(n: Long): Long = {
+    n compare 0 match {
+      case 0 | -1 => 0L
+      case 1 => {
+        var saida = 0
+        var temp = 0
+        do {
+          temp = this.lerTamanhoPedaco(n.toInt - saida)
+          this.data.getFirst.skip(temp)
+          saida += temp
+          this.atualizarListaBuffer
+        } while(temp > 0)
+        saida.toLong
+      }
+    }
+  }
+  
+  private def popBuffer = {
+    val buffer = this.data.removeFirst
+    this.marcado match {
+      case false => buffer.free 
+      case true => {
+        this.resetCache.push(buffer)
+        if(!this.data.isEmpty) this.data.getFirst.mark
+      }
+    }
+  }
+  
+  override def markSupported: Boolean = true
+  
+  override def mark(limiteLeitura: Int) = {
+    if(!this.data.isEmpty) this.data.getFirst.mark
+    if(this.marcado) {
+      this.resetCache.asScala.map(_.free)
+      this.resetCache = null
+    }
+    this.marcado = true
+    this.resetCache = new JLinkedList[IoBuffer]
+  }
+  
+  override def reset = {
+    if(!this.marcado) throw new IOException("Sem posição marcada.")
+    if(!this.data.isEmpty) this.data.getFirst.reset
+    this.resetCache.asScala.map(buffer => {
+      buffer.reset
+      this.data.addFirst(buffer)
+    })
+    this.resetCache.clear
+  }
+  
 }
 
 class StreamSaida(
@@ -226,7 +307,7 @@ class StreamSaida(
     this.streamSaida.close
     Try(this.sessao.close(false).await) match {
       case Success(sessaoAsync) => Unit
-      case Failure(ex) => Unit // java.lang.InterruptedException
+      case Failure(ex) => Unit // FIXME java.lang.InterruptedException
     }
   }
   def size: Int = this.streamSaida.size
