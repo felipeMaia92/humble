@@ -21,9 +21,25 @@ import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpr
 import scala.collection.JavaConverters._
 
 abstract class ActiveRecordModel extends Serializable {
-  @transient private val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
   def salvar = {
-    val pk = this.buscarPKNoAtributo(0)
+    def buscarPKNoAtributo(posicao: Int): JAttribute = {
+      lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
+      val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
+      atributos(posicao).getDeclaredAnnotations.toList
+        .filter(_.annotationType.equals(classOf[javax.persistence.Id]))
+          .map(
+            _.annotationType match {
+              case CONST_ANNOTATION_ID_JPA => atributos(posicao)
+              case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
+                case Success(annotation) => annotation.asInstanceOf[JAttribute]
+                case Failure(ex) => throw new IllegalAccessException(
+                  s"Atributo com @javax.persistence.Id não encontrado na entidade '${this.getClass.getSimpleName}'"
+                )
+              }
+            }
+          ).head
+    }
+    val pk = buscarPKNoAtributo(0)
     pk.setAccessible(true)
     val primaryKey = Try(pk.get(this)) match {
       case Success(valor) => Option(valor)
@@ -33,22 +49,6 @@ abstract class ActiveRecordModel extends Serializable {
       case Some(pk) => SpringContext.dao.atualizar(this)
       case None => SpringContext.dao.criar(this)
     }
-  }
-  private def buscarPKNoAtributo(posicao: Int): JAttribute = {
-    lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
-    atributos(posicao).getDeclaredAnnotations.toList
-      .filter(_.annotationType.equals(classOf[javax.persistence.Id]))
-        .map(
-          _.annotationType match {
-            case CONST_ANNOTATION_ID_JPA => this.atributos(posicao)
-            case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
-              case Success(annotation) => annotation.asInstanceOf[JAttribute]
-              case Failure(ex) => throw new IllegalAccessException(
-                s"Atributo com @javax.persistence.Id não encontrado na entidade '${this.getClass.getSimpleName}'"
-              )
-            }
-          }
-        ).head
   }
   def apagar = SpringContext.dao.apagar(this)
   def json: String = SpringContext.gson.toJson(this)
@@ -98,11 +98,8 @@ object SpringContext {
   def inicializar(configuracao: Configuracao = new Configuracao) = {
     val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpringSimples])
     val infoProjeto = (new org.apache.maven.model.io.xpp3.MavenXpp3Reader).read(new java.io.FileReader("pom.xml"))
-    var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource
+    var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(configuracao.url, configuracao.usuario, configuracao.senha)
 		dataSource.setDriverClassName(configuracao.driverDialeto.driver)
-		dataSource.setUrl(configuracao.url)
-		dataSource.setUsername(configuracao.usuario)
-		dataSource.setPassword(configuracao.senha)
 		var factory = new LocalContainerEntityManagerFactoryBean
     factory.setDataSource(dataSource)
 		factory.setPackagesToScan(Option(configuracao.prefixoPackage).getOrElse(infoProjeto.getGroupId))
@@ -128,12 +125,7 @@ object SpringContext {
     this.contexto = contexto
   }
   lazy val dao = SpringContext.contexto.getBean(classOf[DAOSimples])
-  lazy val gson = new com.google.gson.GsonBuilder()
-                        .disableHtmlEscaping
-                        .setDateFormat("dd/MM/yyyy HH:mm:ss")
-                        .serializeNulls
-                        .setPrettyPrinting
-                        .create
+  lazy val gson = new com.google.gson.GsonBuilder().disableHtmlEscaping.setDateFormat("dd/MM/yyyy HH:mm:ss").serializeNulls.setPrettyPrinting.create
 }
 
 case class Configuracao(
