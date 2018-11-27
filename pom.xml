@@ -219,6 +219,12 @@
 
 		<!-- GSon - F -->
 
+		<dependency>
+		  <groupId>org.apache.maven</groupId>
+		  <artifactId>maven-model</artifactId>
+		  <version>3.3.9</version>
+		</dependency>
+
 	</dependencies>
 
 </project>

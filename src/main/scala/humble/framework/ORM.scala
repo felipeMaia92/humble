@@ -1,4 +1,4 @@
-package xxx.framework
+package humble.framework
 
 import scala.reflect.ClassTag
 import annotation.meta.param
@@ -20,47 +20,41 @@ import org.springframework.transaction.annotation.{ Transactional, EnableTransac
 import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 
-abstract class ActiveRecordModel[PK <: JSerial](implicit @(transient @param) tag: ClassTag[PK]) extends Serializable {
-
-  def salvar =
-    this.primaryKey match {
+abstract class ActiveRecordModel extends Serializable {
+  @transient private val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
+  def salvar = {
+    val pk = this.buscarPKNoAtributo(0)
+    pk.setAccessible(true)
+    val primaryKey = Try(pk.get(this)) match {
+      case Success(valor) => Option(valor)
+      case Failure(ex) => None
+    }
+    primaryKey match {
       case Some(pk) => SpringContext.dao.atualizar(this)
       case None => SpringContext.dao.criar(this)
     }
-
-  def apagar = SpringContext.dao.apagar(this)
-
-  @transient private val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
-  @transient private lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
-
-  private def buscarPKNoAtributo(posicao: Int): List[JAttribute] = {
-    val annotations = atributos(posicao).getDeclaredAnnotations.toList
-    annotations.takeWhile(_.annotationType.equals(classOf[javax.persistence.Id]))
-      .map(
-        _.annotationType match {
-          case CONST_ANNOTATION_ID_JPA => this.atributos(posicao)
-          case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
-            case Success(annotation) => annotation.asInstanceOf[JAttribute]
-            case Failure(ex) => throw new IllegalAccessException
+  }
+  private def buscarPKNoAtributo(posicao: Int): JAttribute = {
+    lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
+    atributos(posicao).getDeclaredAnnotations.toList
+      .filter(_.annotationType.equals(classOf[javax.persistence.Id]))
+        .map(
+          _.annotationType match {
+            case CONST_ANNOTATION_ID_JPA => this.atributos(posicao)
+            case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
+              case Success(annotation) => annotation.asInstanceOf[JAttribute]
+              case Failure(ex) => throw new IllegalAccessException(
+                s"Atributo com @javax.persistence.Id não encontrado na entidade '${this.getClass.getSimpleName}'"
+              )
+            }
           }
-        }
-      )
+        ).head
   }
-
-  def primaryKey: Option[PK] = {
-    val pk = this.buscarPKNoAtributo(0).head
-    pk.setAccessible(true)
-    Try(pk.get(this)) match {
-      case Success(valor) => Option(valor.asInstanceOf[PK])
-      case Failure(ex) => None
-    }
-  }
-
+  def apagar = SpringContext.dao.apagar(this)
   def json: String = SpringContext.gson.toJson(this)
-
 }
 
-abstract class ActiveRecordCompanion[M <: ActiveRecordModel[_]](implicit tag: ClassTag[M]) {
+abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: ClassTag[M]) {
   def listarTodos: List[M] = SpringContext.dao.listarTodos(tag.runtimeClass).asInstanceOf[JList[M]].asScala.toList
   def contarTodos: Long = SpringContext.dao.contarTodos(tag.runtimeClass)
   def buscarPorPK(pk: Any): Option[M] = Try(SpringContext.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]) match {
@@ -101,8 +95,9 @@ class ConfiguracaoSpringSimples
 
 object SpringContext {
   private var contexto: ApplicationContext = null
-  def inicializar(configuracao: Configuracao) = {
+  def inicializar(configuracao: Configuracao = new Configuracao) = {
     val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpringSimples])
+    val infoProjeto = (new org.apache.maven.model.io.xpp3.MavenXpp3Reader).read(new java.io.FileReader("pom.xml"))
     var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource
 		dataSource.setDriverClassName(configuracao.driverDialeto.driver)
 		dataSource.setUrl(configuracao.url)
@@ -110,7 +105,7 @@ object SpringContext {
 		dataSource.setPassword(configuracao.senha)
 		var factory = new LocalContainerEntityManagerFactoryBean
     factory.setDataSource(dataSource)
-		factory.setPackagesToScan(configuracao.prefixoPackage)
+		factory.setPackagesToScan(Option(configuracao.prefixoPackage).getOrElse(infoProjeto.getGroupId))
 		factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter)
 		factory.setJpaProperties({
 		  var properties = new JProperties
@@ -121,7 +116,7 @@ object SpringContext {
   		properties.put("hibernate.cglib.use_reflection_optimizer", configuracao.usarOtimizadorReflection);
   		properties
 		})
-		factory.setPersistenceUnitName(s"${configuracao.nome}PersistenceUnit")
+		factory.setPersistenceUnitName(s"${Option(configuracao.nome).getOrElse(infoProjeto.getArtifactId.replaceAll("\\W", ""))}PersistenceUnit")
 		factory.setPersistenceProviderClass(classOf[HibernatePersistenceProvider])
 		factory.afterPropertiesSet
 		var transactionManager = new JpaTransactionManager
@@ -136,14 +131,15 @@ object SpringContext {
   lazy val gson = new com.google.gson.GsonBuilder()
                         .disableHtmlEscaping
                         .setDateFormat("dd/MM/yyyy HH:mm:ss")
+                        .serializeNulls
                         .setPrettyPrinting
                         .create
 }
 
 case class Configuracao(
-  val nome: String,
-  val prefixoPackage: String,
-  val url: String = s"jdbc:h2:mem:",
+  val nome: String = null,
+  val prefixoPackage: String = null,
+  val url: String = s"jdbc:h2:./arquivos/bancoDados;FILE_LOCK=SOCKET;",
   val usuario: String = "admin",
   val senha: String = "",
   val driverDialeto: DriverDialeto = DriverDialeto.H2,

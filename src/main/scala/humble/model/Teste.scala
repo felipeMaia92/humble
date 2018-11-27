@@ -1,16 +1,16 @@
-package teste.model
+package humble.model
 
 import java.lang.{ Long => JLong }
 import javax.persistence.{ Column, Entity, Id, GeneratedValue, Table }
-import xxx.framework.{ ActiveRecordModel, ActiveRecordCompanion }
+import humble.framework.{ ActiveRecordModel, ActiveRecordCompanion }
 import org.springframework.context.annotation.{ Configuration }
 import org.springframework.transaction.annotation.{ EnableTransactionManagement }
 
 object Teste extends ActiveRecordCompanion[Teste]
 
 @Entity
-@Table(name = "TESTE")
-class Teste extends ActiveRecordModel[JLong] {
+@Table(name = "TESTE", schema = "PUBLIC")
+class Teste extends ActiveRecordModel {
 
   @Id
   @GeneratedValue
