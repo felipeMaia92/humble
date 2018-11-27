@@ -1,4 +1,4 @@
-package humble.framework
+package xxx.framework
 
 import scala.reflect.ClassTag
 import annotation.meta.param
@@ -11,7 +11,7 @@ import javax.persistence.{ PersistenceContext, EntityManager, EntityManagerFacto
 import javax.sql.DataSource
 import org.hibernate.jpa.HibernatePersistenceProvider
 import org.springframework.context.ApplicationContext
-import org.springframework.context.annotation.{ Bean, Configuration, ComponentScan }
+import org.springframework.context.annotation.{ Bean, Configuration, ComponentScan, Import }
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.orm.jpa.{ LocalContainerEntityManagerFactoryBean, JpaTransactionManager }
@@ -70,7 +70,6 @@ abstract class ActiveRecordCompanion[M <: ActiveRecordModel[_]](implicit tag: Cl
   def fromJson(json: String): M = SpringContext.gson.fromJson(json, tag.runtimeClass)
 }
 
-@DAO
 class DAOSimples {
 
   @PersistenceContext
@@ -96,30 +95,43 @@ class DAOSimples {
 
 }
 
-
+@Configuration
+@EnableTransactionManagement
+class ConfiguracaoSpringSimples
 
 object SpringContext {
-
-  private var contexto: AnnotationConfigApplicationContext = null
-
-  def inicializar(
-        nome: String = "humble",
-        prefixoPackage: String = "humble",
-        url: String = "jdbc:h2:./arquivos/bancoDados;CIPHER=AES;FILE_LOCK=SOCKET;",
-        usuario: String = "admin",
-        senha: String = "bc0259c5c27fea4a09afb897d581c970 cabd7e3571d4cccb57f130c6fa919a0a",
-        driverDialeto: DriverDialeto = DriverDialeto.H2,
-        hbm2ddl: HBM2DDL = HBM2DDL.ATUALIZAR,
-        exibirSQL: JBoolean = true,
-        formatarSQLExibido: JBoolean = true,
-        usarOtimizadorReflection: JBoolean = true
-  ) = {
-    this.contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpring])
-    this.contexto.scan(s"${prefixoPackage}.*")
-    this.contexto.refresh
-    this.contexto.start
+  private var contexto: ApplicationContext = null
+  def inicializar(configuracao: Configuracao) = {
+    val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpringSimples])
+    var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource
+		dataSource.setDriverClassName(configuracao.driverDialeto.driver)
+		dataSource.setUrl(configuracao.url)
+		dataSource.setUsername(configuracao.usuario)
+		dataSource.setPassword(configuracao.senha)
+		var factory = new LocalContainerEntityManagerFactoryBean
+    factory.setDataSource(dataSource)
+		factory.setPackagesToScan(configuracao.prefixoPackage)
+		factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter)
+		factory.setJpaProperties({
+		  var properties = new JProperties
+  		properties.put("hibernate.dialect", configuracao.driverDialeto.dialeto)
+  		properties.put("hibernate.show_sql", configuracao.exibirSQL)
+  		properties.put("hibernate.format_sql", configuracao.formatarSQLExibido)
+  		properties.put("hibernate.hbm2ddl.auto", configuracao.hbm2ddl.valor)
+  		properties.put("hibernate.cglib.use_reflection_optimizer", configuracao.usarOtimizadorReflection);
+  		properties
+		})
+		factory.setPersistenceUnitName(s"${configuracao.nome}PersistenceUnit")
+		factory.setPersistenceProviderClass(classOf[HibernatePersistenceProvider])
+		factory.afterPropertiesSet
+		var transactionManager = new JpaTransactionManager
+    transactionManager.setEntityManagerFactory(factory.getObject)
+    contexto.getBeanFactory.registerSingleton("dataSource", dataSource)
+    contexto.getBeanFactory.registerSingleton("entityManagerFactory", factory.getObject)
+    contexto.getBeanFactory.registerSingleton("transactionManager", transactionManager)
+    contexto.register(classOf[DAOSimples])
+    this.contexto = contexto
   }
-
   lazy val dao = SpringContext.contexto.getBean(classOf[DAOSimples])
   lazy val gson = new com.google.gson.GsonBuilder()
                         .disableHtmlEscaping
@@ -128,61 +140,18 @@ object SpringContext {
                         .create
 }
 
-@Configuration
-@EnableTransactionManagement
-class ConfiguracaoSpring(
-        val nome: String,
-        val prefixoPackage: String,
-        val url: String,
-        val usuario: String,
-        val senha: String,
-        val driverDialeto: DriverDialeto,
-        val hbm2ddl: HBM2DDL,
-        val exibirSQL: JBoolean,
-        val formatarSQLExibido: JBoolean,
-        val usarOtimizadorReflection: JBoolean) {
-
-  @Bean
-  def dataSource: DataSource = {
-    var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource
-		dataSource.setDriverClassName(this.driverDialeto.driver)
-		dataSource.setUrl(this.url)
-		dataSource.setUsername(this.usuario)
-		dataSource.setPassword(this.senha)
-		dataSource
-  }
-
-  def hibernateProperties: JProperties = {
-		var properties = new JProperties
-		properties.put("hibernate.dialect", this.driverDialeto.dialeto)
-		properties.put("hibernate.show_sql", this.exibirSQL)
-		properties.put("hibernate.format_sql", this.formatarSQLExibido)
-		properties.put("hibernate.hbm2ddl.auto", this.hbm2ddl.valor)
-		properties.put("hibernate.cglib.use_reflection_optimizer", this.usarOtimizadorReflection);
-		properties
-  }
-
-  @Bean
-  def transactionManager: JpaTransactionManager = {
-    var transactionManager = new JpaTransactionManager
-    transactionManager.setEntityManagerFactory(this.entityManagerFactory)
-    transactionManager
-  }
-
-  @Bean
-  def entityManagerFactory: EntityManagerFactory = {
-    var factory = new LocalContainerEntityManagerFactoryBean
-    factory.setDataSource(this.dataSource)
-		factory.setPackagesToScan(this.prefixoPackage)
-		factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter)
-		factory.setJpaProperties(this.hibernateProperties)
-		factory.setPersistenceUnitName(s"${this.nome}PersistenceUnit")
-		factory.setPersistenceProviderClass(classOf[HibernatePersistenceProvider])
-		factory.afterPropertiesSet
-		return factory.getObject
-  }
-
-}
+case class Configuracao(
+  val nome: String,
+  val prefixoPackage: String,
+  val url: String = s"jdbc:h2:mem:",
+  val usuario: String = "admin",
+  val senha: String = "",
+  val driverDialeto: DriverDialeto = DriverDialeto.H2,
+  val hbm2ddl: HBM2DDL = HBM2DDL.ATUALIZAR,
+  val exibirSQL: JBoolean = true,
+  val formatarSQLExibido: JBoolean = true,
+  val usarOtimizadorReflection: JBoolean = true
+)
 
 case class HBM2DDL(valor: String)
 object HBM2DDL {

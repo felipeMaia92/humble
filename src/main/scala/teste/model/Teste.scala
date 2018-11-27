@@ -1,8 +1,10 @@
-package humble.model
+package teste.model
 
 import java.lang.{ Long => JLong }
 import javax.persistence.{ Column, Entity, Id, GeneratedValue, Table }
-import humble.framework.{ ActiveRecordModel, ActiveRecordCompanion }
+import xxx.framework.{ ActiveRecordModel, ActiveRecordCompanion }
+import org.springframework.context.annotation.{ Configuration }
+import org.springframework.transaction.annotation.{ EnableTransactionManagement }
 
 object Teste extends ActiveRecordCompanion[Teste]
 
