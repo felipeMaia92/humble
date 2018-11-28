@@ -1,18 +1,15 @@
 package humble.framework
 
-import scala.reflect.ClassTag
-import annotation.meta.param
 import scala.util.{ Try, Success, Failure }
 import java.lang.{ Boolean => JBoolean }
 import java.lang.reflect.{ Field => JAttribute }
-import java.io.{ Serializable => JSerial }
+import java.io.{ Serializable => JSerial, File => JFile }
 import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties }
 import javax.persistence.{ PersistenceContext, EntityManager, EntityManagerFactory, Transient }
 import javax.sql.DataSource
 import org.hibernate.jpa.HibernatePersistenceProvider
 import org.springframework.context.ApplicationContext
-import org.springframework.context.annotation.{ Bean, Configuration, ComponentScan, Import }
-import org.springframework.context.annotation.AnnotationConfigApplicationContext
+import org.springframework.context.annotation.{ Bean, Configuration, ComponentScan, Import, AnnotationConfigApplicationContext }
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.orm.jpa.{ LocalContainerEntityManagerFactoryBean, JpaTransactionManager }
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter
@@ -54,7 +51,7 @@ abstract class ActiveRecordModel extends Serializable {
   def json: String = SpringContext.gson.toJson(this)
 }
 
-abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: ClassTag[M]) {
+abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: scala.reflect.ClassTag[M]) {
   def listarTodos: List[M] = SpringContext.dao.listarTodos(tag.runtimeClass).asInstanceOf[JList[M]].asScala.toList
   def contarTodos: Long = SpringContext.dao.contarTodos(tag.runtimeClass)
   def buscarPorPK(pk: Any): Option[M] = Try(SpringContext.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]) match {
@@ -96,24 +93,29 @@ class ConfiguracaoSpringSimples
 object SpringContext {
   private var contexto: ApplicationContext = null
   def inicializar(configuracao: Configuracao = new Configuracao) = {
+		val configuracaoAutomatica = {
+      var properties = new JProperties
+      properties.load(this.getClass.getClassLoader.getResourceAsStream("configuracoes.properties"))
+      properties
+    }
     val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpringSimples])
-    val infoProjeto = (new org.apache.maven.model.io.xpp3.MavenXpp3Reader).read(new java.io.FileReader("pom.xml"))
     var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(configuracao.url, configuracao.usuario, configuracao.senha)
 		dataSource.setDriverClassName(configuracao.driverDialeto.driver)
 		var factory = new LocalContainerEntityManagerFactoryBean
     factory.setDataSource(dataSource)
-		factory.setPackagesToScan(Option(configuracao.prefixoPackage).getOrElse(infoProjeto.getGroupId))
+		factory.setPackagesToScan(Option(configuracao.prefixoPackage).getOrElse(configuracaoAutomatica.getProperty("spring.package.scan")))
 		factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter)
 		factory.setJpaProperties({
 		  var properties = new JProperties
   		properties.put("hibernate.dialect", configuracao.driverDialeto.dialeto)
   		properties.put("hibernate.show_sql", configuracao.exibirSQL)
-  		properties.put("hibernate.format_sql", configuracao.formatarSQLExibido)
+  		properties.put("hibernate.format_sql", configuracao.formatarSQL)
   		properties.put("hibernate.hbm2ddl.auto", configuracao.hbm2ddl.valor)
   		properties.put("hibernate.cglib.use_reflection_optimizer", configuracao.usarOtimizadorReflection);
   		properties
 		})
-		factory.setPersistenceUnitName(s"${Option(configuracao.nome).getOrElse(infoProjeto.getArtifactId.replaceAll("\\W", ""))}PersistenceUnit")
+		factory.setPersistenceUnitName(s"${Option(configuracao.nome)
+		  .getOrElse(configuracaoAutomatica.getProperty("projeto.nome").replaceAll("\\W", ""))}PersistenceUnit")
 		factory.setPersistenceProviderClass(classOf[HibernatePersistenceProvider])
 		factory.afterPropertiesSet
 		var transactionManager = new JpaTransactionManager
@@ -136,8 +138,8 @@ case class Configuracao(
   val senha: String = "",
   val driverDialeto: DriverDialeto = DriverDialeto.H2,
   val hbm2ddl: HBM2DDL = HBM2DDL.ATUALIZAR,
-  val exibirSQL: JBoolean = true,
-  val formatarSQLExibido: JBoolean = true,
+  val exibirSQL: JBoolean = false,
+  val formatarSQL: JBoolean = true,
   val usarOtimizadorReflection: JBoolean = true
 )
 
