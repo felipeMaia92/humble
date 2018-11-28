@@ -1,5 +1,6 @@
 package humble.framework
 
+import scala.reflect.ClassTag
 import scala.util.{ Try, Success, Failure }
 import java.lang.{ Boolean => JBoolean }
 import java.lang.reflect.{ Field => JAttribute }
@@ -7,7 +8,11 @@ import java.io.{ Serializable => JSerial, File => JFile }
 import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties }
 import javax.persistence.{ PersistenceContext, EntityManager, EntityManagerFactory, Transient }
 import javax.sql.DataSource
+import org.eclipse.jetty.server.Server
+import org.eclipse.jetty.servlet.{ DefaultServlet, ServletContextHandler }
+import org.eclipse.jetty.webapp.WebAppContext
 import org.hibernate.jpa.HibernatePersistenceProvider
+import org.scalatra.servlet.ScalatraListener
 import org.springframework.context.ApplicationContext
 import org.springframework.context.annotation.{ Bean, Configuration, ComponentScan, Import, AnnotationConfigApplicationContext }
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories
@@ -17,8 +22,17 @@ import org.springframework.transaction.annotation.{ Transactional, EnableTransac
 import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 
+class LifeCycle extends org.scalatra.LifeCycle {
+
+  override def init(context: javax.servlet.ServletContext) {
+    context.mount(classOf[humble.model.TesteRest], "/*")
+  }
+  
+}
+
 abstract class ActiveRecordModel extends Serializable {
-  def salvar = {
+  
+  @transient private lazy val pk: JAttribute = {
     def buscarPKNoAtributo(posicao: Int): JAttribute = {
       lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
       val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
@@ -36,29 +50,36 @@ abstract class ActiveRecordModel extends Serializable {
             }
           ).head
     }
-    val pk = buscarPKNoAtributo(0)
-    pk.setAccessible(true)
-    val primaryKey = Try(pk.get(this)) match {
+    val saida = buscarPKNoAtributo(0)
+    saida.setAccessible(true)
+    saida
+  }
+  
+  def salvar = {
+    val primaryKey = Try(this.pk.get(this)) match {
       case Success(valor) => Option(valor)
       case Failure(ex) => None
     }
     primaryKey match {
-      case Some(pk) => SpringContext.dao.atualizar(this)
-      case None => SpringContext.dao.criar(this)
+      case Some(pk) => ContextoAplicacao.dao.atualizar(this)
+      case None => ContextoAplicacao.dao.criar(this)
     }
   }
-  def apagar = SpringContext.dao.apagar(this)
-  def json: String = SpringContext.gson.toJson(this)
+  def apagar = ContextoAplicacao.dao.apagar(this)
+  def json: String = ContextoAplicacao.gson.toJson(this)
 }
 
-abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: scala.reflect.ClassTag[M]) {
-  def listarTodos: List[M] = SpringContext.dao.listarTodos(tag.runtimeClass).asInstanceOf[JList[M]].asScala.toList
-  def contarTodos: Long = SpringContext.dao.contarTodos(tag.runtimeClass)
-  def buscarPorPK(pk: Any): Option[M] = Try(SpringContext.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]) match {
+abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends javax.servlet.http.HttpServlet {
+  def listarTodos: List[M] = ContextoAplicacao.dao.listarTodos(tag.runtimeClass).asInstanceOf[JList[M]].asScala.toList
+  def contarTodos: Long = ContextoAplicacao.dao.contarTodos(tag.runtimeClass)
+  def buscarPorPK(pk: Any): Option[M] = Try(ContextoAplicacao.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]) match {
     case Success(instancia) => Option(instancia)
     case Failure(ex) => None
   }
-  def fromJson(json: String): M = SpringContext.gson.fromJson(json, tag.runtimeClass)
+  def fromJson(json: String): M = ContextoAplicacao.gson.fromJson(json, tag.runtimeClass)
+  def entityManager: EntityManager = ContextoAplicacao.dao.entityManager
+  def listarPorHQL(hql: String): List[M] = this.entityManager.createQuery(hql).getResultList.asInstanceOf[JList[M]].asScala.toList
+  def listarPorSQL(sql: String): List[M] = this.entityManager.createNativeQuery(sql).getResultList.asInstanceOf[JList[M]].asScala.toList
 }
 
 class DAOSimples {
@@ -90,58 +111,71 @@ class DAOSimples {
 @EnableTransactionManagement
 class ConfiguracaoSpringSimples
 
-object SpringContext {
+object ContextoAplicacao {
   private var contexto: ApplicationContext = null
-  def inicializar(configuracao: Configuracao = new Configuracao) = {
+  def iniciar(
+      nome: String = null,
+      prefixoPackage: String = null,
+      url: String = s"jdbc:h2:./arquivos/bancoDados;FILE_LOCK=SOCKET;",
+      usuario: String = "admin",
+      senha: String = "",
+      driverDialeto: DriverDialeto = DriverDialeto.H2,
+      hbm2ddl: HBM2DDL = HBM2DDL.ATUALIZAR,
+      exibirSQL: JBoolean = false,
+      formatarSQL: JBoolean = true,
+      usarOtimizadorReflection: JBoolean = true,
+      portaWebApp: Integer = 8080,
+      prefixoContextoWebApp: String = "/",
+      diretorioResourcesWebApp: String = "src/main/webapp"
+  ) = {
 		val configuracaoAutomatica = {
-      var properties = new JProperties
+      val properties = new JProperties
       properties.load(this.getClass.getClassLoader.getResourceAsStream("configuracoes.properties"))
       properties
     }
     val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpringSimples])
-    var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(configuracao.url, configuracao.usuario, configuracao.senha)
-		dataSource.setDriverClassName(configuracao.driverDialeto.driver)
-		var factory = new LocalContainerEntityManagerFactoryBean
+    val dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(url, usuario, senha)
+		dataSource.setDriverClassName(driverDialeto.driver)
+		val factory = new LocalContainerEntityManagerFactoryBean
     factory.setDataSource(dataSource)
-		factory.setPackagesToScan(Option(configuracao.prefixoPackage).getOrElse(configuracaoAutomatica.getProperty("spring.package.scan")))
+		factory.setPackagesToScan(Option(prefixoPackage).getOrElse(configuracaoAutomatica.getProperty("spring.package.scan")))
 		factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter)
 		factory.setJpaProperties({
-		  var properties = new JProperties
-  		properties.put("hibernate.dialect", configuracao.driverDialeto.dialeto)
-  		properties.put("hibernate.show_sql", configuracao.exibirSQL)
-  		properties.put("hibernate.format_sql", configuracao.formatarSQL)
-  		properties.put("hibernate.hbm2ddl.auto", configuracao.hbm2ddl.valor)
-  		properties.put("hibernate.cglib.use_reflection_optimizer", configuracao.usarOtimizadorReflection);
+		  val properties = new JProperties
+  		properties.put("hibernate.dialect", driverDialeto.dialeto)
+  		properties.put("hibernate.show_sql", exibirSQL)
+  		properties.put("hibernate.format_sql", formatarSQL)
+  		properties.put("hibernate.hbm2ddl.auto", hbm2ddl.valor)
+  		properties.put("hibernate.cglib.use_reflection_optimizer", usarOtimizadorReflection);
   		properties
 		})
-		factory.setPersistenceUnitName(s"${Option(configuracao.nome)
+		factory.setPersistenceUnitName(s"${Option(nome)
 		  .getOrElse(configuracaoAutomatica.getProperty("projeto.nome").replaceAll("\\W", ""))}PersistenceUnit")
 		factory.setPersistenceProviderClass(classOf[HibernatePersistenceProvider])
 		factory.afterPropertiesSet
-		var transactionManager = new JpaTransactionManager
+		val transactionManager = new JpaTransactionManager
     transactionManager.setEntityManagerFactory(factory.getObject)
     contexto.getBeanFactory.registerSingleton("dataSource", dataSource)
     contexto.getBeanFactory.registerSingleton("entityManagerFactory", factory.getObject)
     contexto.getBeanFactory.registerSingleton("transactionManager", transactionManager)
     contexto.register(classOf[DAOSimples])
     this.contexto = contexto
+    val server = new Server(portaWebApp)
+    server.setHandler({
+      val webContext = new WebAppContext
+      webContext setContextPath(prefixoContextoWebApp)
+      webContext.setResourceBase(diretorioResourcesWebApp)
+      webContext.addEventListener(new ScalatraListener)
+      webContext.addServlet(classOf[DefaultServlet], "/")
+      webContext
+    })
+    contexto.getBeanFactory.registerSingleton("server", server)
+    server.start
+    server.join
   }
-  lazy val dao = SpringContext.contexto.getBean(classOf[DAOSimples])
-  lazy val gson = new com.google.gson.GsonBuilder().disableHtmlEscaping.setDateFormat("dd/MM/yyyy HH:mm:ss").serializeNulls.setPrettyPrinting.create
+  lazy val dao = ContextoAplicacao.contexto.getBean(classOf[DAOSimples])
+  lazy val gson = (new com.google.gson.GsonBuilder).disableHtmlEscaping.setDateFormat("dd/MM/yyyy HH:mm:ss").serializeNulls.setPrettyPrinting.create
 }
-
-case class Configuracao(
-  val nome: String = null,
-  val prefixoPackage: String = null,
-  val url: String = s"jdbc:h2:./arquivos/bancoDados;FILE_LOCK=SOCKET;",
-  val usuario: String = "admin",
-  val senha: String = "",
-  val driverDialeto: DriverDialeto = DriverDialeto.H2,
-  val hbm2ddl: HBM2DDL = HBM2DDL.ATUALIZAR,
-  val exibirSQL: JBoolean = false,
-  val formatarSQL: JBoolean = true,
-  val usarOtimizadorReflection: JBoolean = true
-)
 
 case class HBM2DDL(valor: String)
 object HBM2DDL {
