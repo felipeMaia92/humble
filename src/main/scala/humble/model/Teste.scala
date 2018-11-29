@@ -2,16 +2,11 @@ package humble.model
 
 import java.lang.{ Long => JLong }
 import javax.persistence.{ Column, Entity, Id, GeneratedValue, Table }
-import humble.framework.{ ContextoAplicacao, ActiveRecordModel, ActiveRecordCompanion }
-import org.springframework.context.annotation.{ Configuration }
-import org.springframework.transaction.annotation.{ EnableTransactionManagement }
+import humble.framework.{ ActiveRecordModel, ActiveRecordCompanion, ActiveRecordRest }
 
-object Teste extends ActiveRecordCompanion[Teste] 
-  
-class TesteRest extends org.scalatra.ScalatraServlet {
-  get("/listar/todos") { ContextoAplicacao.gson.toJson(Teste.listarTodos) }
-  get("/contar/todos") { ContextoAplicacao.gson.toJson(Teste.contarTodos) }
-}
+class TesteRest extends ActiveRecordRest[Teste]
+
+object Teste extends ActiveRecordCompanion[Teste]
 
 @Entity
 @Table(name = "TESTE", schema = "PUBLIC")
