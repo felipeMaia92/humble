@@ -32,67 +32,6 @@ class LifeCycle extends org.scalatra.LifeCycle {
 
 }
 
-case class RespostaFiltroRest(lista: JList[Object], registros: Long, totalRegistros: Long, paginaAtual: Integer, totalPaginas: Integer)
-
-abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
-
-  before() {
-    contentType = "application/json"
-  }
-
-  get("/buscar/:pk") {
-    var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
-    instancia.chavePrimaria.set(instancia, params.getAs[Long]("pk").get)
-    instancia.recarregar match {
-      case Some(instancia: M) => Ok(instancia.json)
-      case None => Ok(ContextoAplicacao.gson.toJson("Nenhum registro encontrado."))
-    }
-  }
-
-  post("/listar") {
-    val registros = params.getAsOrElse[Long]("registros", Integer.MAX_VALUE)
-    val pagina = params.getAsOrElse[Int]("pagina", 1)
-    request.body.length match {
-      case 0 => Ok(ContextoAplicacao.gson.toJson(tag.runtimeClass.newInstance.asInstanceOf[M].listarComoFiltro(registros.toInt, pagina)))
-      case _ =>
-        Try(ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)) match {
-          case Success(filtro: M) => {
-            val lista = filtro.listarComoFiltro(registros.toInt, pagina).asInstanceOf[JList[Object]]
-            val totalRegistros = filtro.contarComoFiltro
-            val parcialTotalPaginas = (totalRegistros / registros).toInt
-            Ok(ContextoAplicacao.gson.toJson(
-               RespostaFiltroRest(lista, lista.size.toLong, totalRegistros, pagina,parcialTotalPaginas + (if(totalRegistros % registros != 0) 1 else 0))
-            ))
-          }
-          case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
-        }
-    }
-  }
-
-  post("/salvar") {
-    Try(ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)) match {
-      case Success(instancia: M) => {
-        instancia.salvar
-        Ok(instancia.json)
-      }
-      case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
-    }
-  }
-
-  delete("/apagar/:pk") {
-    var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
-    instancia.chavePrimaria.set(instancia, params.getAs[Long]("pk").get)
-    instancia.recarregar match {
-      case Some(temp: M) => {
-        temp.apagar
-        Ok(temp.json)
-      }
-      case None => Ok(ContextoAplicacao.gson.toJson("Nenhum registro encontrado."))
-    }
-  }
-
-}
-
 abstract class ActiveRecordModel extends Serializable {
   @transient lazy val chavePrimaria: JAttribute = {
     def buscarPKNoAtributo(posicao: Int): JAttribute = {
@@ -159,6 +98,65 @@ abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: Class
     case Failure(ex) => None
   }
   def fromJson(json: String): M = ContextoAplicacao.gson.fromJson(json, tag.runtimeClass)
+}
+
+case class RespostaFiltroRest(lista: JList[Object], registros: Long, totalRegistros: Long, paginaAtual: Integer, totalPaginas: Integer)
+abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
+
+  before() {
+    contentType = "application/json"
+  }
+
+  get("/buscar/:pk") {
+    var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
+    instancia.chavePrimaria.set(instancia, params.getAs[Long]("pk").get)
+    instancia.recarregar match {
+      case Some(instancia: M) => Ok(instancia.json)
+      case None => Ok(ContextoAplicacao.gson.toJson("Nenhum registro encontrado."))
+    }
+  }
+
+  post("/listar") {
+    val registros = params.getAsOrElse[Long]("registros", Integer.MAX_VALUE)
+    val pagina = params.getAsOrElse[Int]("pagina", 1)
+    request.body.length match {
+      case 0 => Ok(ContextoAplicacao.gson.toJson(tag.runtimeClass.newInstance.asInstanceOf[M].listarComoFiltro(registros.toInt, pagina)))
+      case _ =>
+        Try(ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)) match {
+          case Success(filtro: M) => {
+            val lista = filtro.listarComoFiltro(registros.toInt, pagina).asInstanceOf[JList[Object]]
+            val totalRegistros = filtro.contarComoFiltro
+            val parcialTotalPaginas = (totalRegistros / registros).toInt
+            Ok(ContextoAplicacao.gson.toJson(
+               RespostaFiltroRest(lista, lista.size.toLong, totalRegistros, pagina,parcialTotalPaginas + (if(totalRegistros % registros != 0) 1 else 0))
+            ))
+          }
+          case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
+        }
+    }
+  }
+
+  post("/salvar") {
+    Try(ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)) match {
+      case Success(instancia: M) => {
+        instancia.salvar
+        Ok(instancia.json)
+      }
+      case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
+    }
+  }
+
+  delete("/apagar/:pk") {
+    var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
+    instancia.chavePrimaria.set(instancia, params.getAs[Long]("pk").get)
+    instancia.recarregar match {
+      case Some(temp: M) => {
+        temp.apagar
+        Ok(temp.json)
+      }
+      case None => Ok(ContextoAplicacao.gson.toJson("Nenhum registro encontrado."))
+    }
+  }
 
 }
 
@@ -233,7 +231,6 @@ class DAOSimples {
     mapAtributoObjeto.map(atributoObjeto => query.setParameter(atributoObjeto._1, atributoObjeto._2))
     query
   }
-
 }
 
 @Configuration
