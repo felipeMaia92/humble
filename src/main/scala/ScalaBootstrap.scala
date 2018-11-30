@@ -1,1 +1,1 @@
-class ScalatraBootstrap extends humble.framework.LifeCycle
+class ScalatraBootstrap extends humble.framework.ActiveLifeCycle

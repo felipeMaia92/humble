@@ -8,6 +8,7 @@ import java.io.{ Serializable => JSerial, File => JFile }
 import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties }
 import javax.persistence.{ PersistenceContext, EntityManager, EntityManagerFactory, Transient, Query }
 import javax.sql.DataSource
+import org.apache.log4j.Logger
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.servlet.{ DefaultServlet, ServletContextHandler }
 import org.eclipse.jetty.webapp.WebAppContext
@@ -20,16 +21,20 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.orm.jpa.{ LocalContainerEntityManagerFactoryBean, JpaTransactionManager }
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter
 import org.springframework.transaction.annotation.{ Transactional, EnableTransactionManagement }
-import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
+import org.springframework.stereotype.{ Repository => DAO/*, Component => WiredSpringObject*/ }
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ Map => MapMutavel }
 
-class LifeCycle extends org.scalatra.LifeCycle {
-
+class ActiveLifeCycle extends org.scalatra.LifeCycle {
+  lazy val logger = Logger.getLogger(classOf[ActiveLifeCycle])
   override def init(context: javax.servlet.ServletContext) {
-    context.mount(classOf[humble.model.TesteRest], "/*")
+    HackGetClassesProjeto.listarClassesNaPackage(ContextoAplicacao.packageRaizProjeto)
+      .asScala.filter(_.getSuperclass().equals(classOf[ActiveRecordRest[_]])).map(classe => {
+        val mapeamentoEndpointUrl = s"/${classe.getSimpleName.replaceAll("Rest", "").toLowerCase}/*"
+        context.mount(classe, mapeamentoEndpointUrl)
+        this.logger.info(s"Classe '${classe.getName}' montada com o endpoint '${mapeamentoEndpointUrl}'")
+    })
   }
-
 }
 
 abstract class ActiveRecordModel extends Serializable {
@@ -119,21 +124,16 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
   post("/listar") {
     val registros = params.getAsOrElse[Long]("registros", Integer.MAX_VALUE)
     val pagina = params.getAsOrElse[Int]("pagina", 1)
-    request.body.length match {
-      case 0 => Ok(ContextoAplicacao.gson.toJson(tag.runtimeClass.newInstance.asInstanceOf[M].listarComoFiltro(registros.toInt, pagina)))
-      case _ =>
-        Try(ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)) match {
-          case Success(filtro: M) => {
-            val lista = filtro.listarComoFiltro(registros.toInt, pagina).asInstanceOf[JList[Object]]
-            val totalRegistros = filtro.contarComoFiltro
-            val parcialTotalPaginas = (totalRegistros / registros).toInt
-            Ok(ContextoAplicacao.gson.toJson(
-               RespostaFiltroRest(lista, lista.size.toLong, totalRegistros, pagina,parcialTotalPaginas + (if(totalRegistros % registros != 0) 1 else 0))
-            ))
-          }
-          case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
-        }
+    val filtro: M = request.body.length match {
+      case 0 => tag.runtimeClass.newInstance.asInstanceOf[M]
+      case _ => ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)
     }
+    val lista = filtro.listarComoFiltro(registros.toInt, pagina).asInstanceOf[JList[Object]]
+    val totalRegistros = filtro.contarComoFiltro
+    val parcialTotalPaginas = (totalRegistros / registros).toInt
+    Ok(ContextoAplicacao.gson.toJson(
+      RespostaFiltroRest(lista, lista.size.toLong, totalRegistros, pagina,parcialTotalPaginas + (if(totalRegistros % registros != 0) 1 else 0))
+    ))
   }
 
   post("/salvar") {
@@ -148,7 +148,7 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
 
   delete("/apagar/:pk") {
     var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
-    instancia.chavePrimaria.set(instancia, params.getAs[Long]("pk").get)
+    instancia.chavePrimaria.set(instancia, params.get("pk").get)
     instancia.recarregar match {
       case Some(temp: M) => {
         temp.apagar
@@ -239,6 +239,7 @@ class ConfiguracaoSpringSimples
 
 object ContextoAplicacao {
   private var contexto: ApplicationContext = null
+  var packageRaizProjeto: String = null
   def iniciar(
       ativarServidorWeb: JBoolean = true,
       portaWebApp: Integer = 8080,
@@ -265,7 +266,8 @@ object ContextoAplicacao {
     dataSource.setDriverClassName(driverDialetoJPA.driver)
     val factory = new LocalContainerEntityManagerFactoryBean
     factory.setDataSource(dataSource)
-    factory.setPackagesToScan(Option(prefixoPackage).getOrElse(configuracaoAutomatica.getProperty("spring.package.scan")))
+    this.packageRaizProjeto = Option(prefixoPackage).getOrElse(configuracaoAutomatica.getProperty("spring.package.scan"))
+    factory.setPackagesToScan(packageRaizProjeto)
     factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter)
     factory.setJpaProperties({
       val properties = new JProperties
@@ -303,7 +305,8 @@ object ContextoAplicacao {
     }
   }
   lazy val dao = ContextoAplicacao.contexto.getBean(classOf[DAOSimples])
-  lazy val gson = (new com.google.gson.GsonBuilder).disableHtmlEscaping.setDateFormat("dd/MM/yyyy HH:mm:ss").serializeNulls.setPrettyPrinting.create
+  lazy val gson = (new com.google.gson.GsonBuilder).disableHtmlEscaping
+    .setDateFormat("dd/MM/yyyy HH:mm:ss").serializeNulls.setPrettyPrinting.create
 }
 
 case class HBM2DDL(valor: String)
