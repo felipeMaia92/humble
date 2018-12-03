@@ -6,7 +6,7 @@ import humble.framework.{ ActiveRecordModel, ActiveRecordCompanion, ActiveRecord
 
 class TesteRest extends ActiveRecordRest[Teste]
 
-object Teste extends ActiveRecordCompanion[Teste]
+//object Teste extends ActiveRecordCompanion[Teste]
 
 @Entity
 @Table(name = "TESTE", schema = "PUBLIC")

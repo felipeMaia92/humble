@@ -77,8 +77,23 @@ abstract class ActiveRecordModel extends Serializable {
       case Failure(ex) => None
     }
   }
-  def listarComoFiltro(registros: Integer = Integer.MAX_VALUE, pagina: Integer = 1): JList[_] = ContextoAplicacao.dao.listarComFiltro(this, registros, pagina)
-  def contarComoFiltro: Long = ContextoAplicacao.dao.contarComFiltro(this)
+  private def removerChavePrimariaFiltro(instancia: Any): Any = {
+    val tempChavePrimaria = this.chavePrimaria.get(this)
+    this.chavePrimaria.set(this, null)
+    tempChavePrimaria
+  }
+  def listarComoFiltro(registros: Integer = Integer.MAX_VALUE, pagina: Integer = 1): JList[_] = {
+    val pk = this.removerChavePrimariaFiltro(this)
+    val lista = ContextoAplicacao.dao.listarComFiltro(this, registros, pagina)
+    this.chavePrimaria.set(this, pk)
+    lista
+  }
+  def contarComoFiltro: Long = {
+    val pk = this.removerChavePrimariaFiltro(this)
+    val contador = ContextoAplicacao.dao.contarComFiltro(this)
+    this.chavePrimaria.set(this, pk)
+    contador
+  }
   def json: String = ContextoAplicacao.gson.toJson(this)
 }
 
@@ -113,8 +128,23 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
   }
 
   get("/buscar/:pk") {
+    // FIXME Cara, isso tá porco
     var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
-    instancia.chavePrimaria.set(instancia, params.getAs[Long]("pk").get)
+    val pk = params.get("pk").get
+    val pkNormalizada = instancia.chavePrimaria.getType.getSimpleName match {
+      case "Long" =>            pk.toLong
+      case "Integer" | "Int" => pk.toInt
+      case "Byte" =>            pk.toByte
+      case "Boolean" =>         pk.toBoolean
+      case "Double" =>          pk.toDouble
+      case "Float" =>           pk.toFloat
+      case "Short" =>           pk.toShort
+      case "Character" =>       pk.toCharArray()(0)
+      case "String" =>          pk
+      case "Date" => ContextoAplicacao.sdf.parse(pk)
+      case _ => pk.asInstanceOf[java.lang.Object]
+    }
+    instancia.chavePrimaria.set(instancia, pkNormalizada)
     instancia.recarregar match {
       case Some(instancia: M) => Ok(instancia.json)
       case None => Ok(ContextoAplicacao.gson.toJson("Nenhum registro encontrado."))
@@ -241,20 +271,20 @@ object ContextoAplicacao {
   private var contexto: ApplicationContext = null
   var packageRaizProjeto: String = null
   def iniciar(
-      ativarServidorWeb: JBoolean = true,
-      portaWebApp: Integer = 8080,
-      nome: String = null,
-      prefixoContextoWebApp: String = "/",
-      prefixoPackage: String = null,
-      urlJDBC: String = s"jdbc:h2:./arquivos/bancoDados;FILE_LOCK=SOCKET;",
-      usuarioBancoDados: String = "admin",
-      senhaBancoDados: String = "",
-      driverDialetoJPA: DriverDialeto = DriverDialeto.H2,
-      hbm2ddl: HBM2DDL = HBM2DDL.ATUALIZAR,
-      exibirSQL: JBoolean = false,
-      formatarSQL: JBoolean = true,
-      usarOtimizadorReflection: JBoolean = true,
-      diretorioResourcesWebApp: String = "src/main/webapp"
+      ativarServidorWeb: JBoolean,
+      portaWebApp: Integer,
+      nome: String,
+      prefixoContextoWebApp: String,
+      prefixoPackage: String,
+      urlJDBC: String,
+      usuarioBancoDados: String,
+      senhaBancoDados: String,
+      driverDialetoJPA: DriverDialeto,
+      hbm2ddl: HBM2DDL,
+      exibirSQL: JBoolean,
+      formatarSQL: JBoolean,
+      usarOtimizadorReflection: JBoolean,
+      diretorioResourcesWebApp: String
   ) = {
     val configuracaoAutomatica = {
       val properties = new JProperties
@@ -304,9 +334,11 @@ object ContextoAplicacao {
       server.join
     }
   }
+  private lazy val formatoData = "dd/MM/yyyy HH:mm:ss"
   lazy val dao = ContextoAplicacao.contexto.getBean(classOf[DAOSimples])
   lazy val gson = (new com.google.gson.GsonBuilder).disableHtmlEscaping
-    .setDateFormat("dd/MM/yyyy HH:mm:ss").serializeNulls.setPrettyPrinting.create
+    .setDateFormat(formatoData).serializeNulls.setPrettyPrinting.create
+  lazy val sdf = new java.text.SimpleDateFormat(formatoData)
 }
 
 case class HBM2DDL(valor: String)
