@@ -5,7 +5,7 @@ import scala.util.{ Try, Success, Failure }
 import java.lang.{ Boolean => JBoolean }
 import java.lang.reflect.{ Field => JAttribute }
 import java.io.{ Serializable => JSerial, File => JFile }
-import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties }
+import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties, Calendar => JCalendar }
 import javax.persistence.{ PersistenceContext, EntityManager, EntityManagerFactory, Transient, Query }
 import javax.sql.DataSource
 import org.apache.log4j.Logger
@@ -21,7 +21,8 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.orm.jpa.{ LocalContainerEntityManagerFactoryBean, JpaTransactionManager }
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter
 import org.springframework.transaction.annotation.{ Transactional, EnableTransactionManagement }
-import org.springframework.stereotype.{ Repository => DAO/*, Component => WiredSpringObject*/ }
+import org.springframework.scheduling.quartz.SchedulerFactoryBean
+import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpringObject }
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ Map => MapMutavel }
 
@@ -49,7 +50,7 @@ abstract class ActiveRecordModel extends Serializable {
               case CONST_ANNOTATION_ID_JPA => atributos(posicao)
               case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
                 case Success(annotation) => annotation.asInstanceOf[JAttribute]
-                case Failure(ex) => throw new Exception(
+                case Failure(ex) => throw new IllegalStateException(
                   s"Atributo com @javax.persistence.Id inexistente na entidade '${this.getClass.getSimpleName}'"
                 )
               }
@@ -148,7 +149,7 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
     instancia.chavePrimaria.set(instancia, pkNormalizada)
     instancia.recarregar match {
       case Some(instanciaOk: M) => instanciaOk
-      case None => throw new Exception("Nenhum registro encontrado.")
+      case None => throw new IllegalStateException("Nenhum registro encontrado.")
     }
   }
   
@@ -287,7 +288,8 @@ object ContextoAplicacao {
       exibirSQL: JBoolean,
       formatarSQL: JBoolean,
       usarOtimizadorReflection: JBoolean,
-      diretorioResourcesWebApp: String
+      diretorioResourcesWebApp: String,
+      ativarJobManager: JBoolean
   ) = {
     val configuracaoAutomatica = {
       val properties = new JProperties
@@ -321,7 +323,6 @@ object ContextoAplicacao {
     contexto.getBeanFactory.registerSingleton("entityManagerFactory", factory.getObject)
     contexto.getBeanFactory.registerSingleton("transactionManager", transactionManager)
     contexto.register(classOf[DAOSimples])
-    this.contexto = contexto
     if(ativarServidorWeb) {
       val server = new Server(portaWebApp)
       server.setHandler({
@@ -333,15 +334,57 @@ object ContextoAplicacao {
         webContext
       })
       contexto.getBeanFactory.registerSingleton("server", server)
+    }
+    if(ativarJobManager) {
+      val scheduler = (new org.quartz.impl.StdSchedulerFactory).getScheduler
+      scheduler.start
+      HackGetClassesProjeto.listarClassesNaPackage(ContextoAplicacao.packageRaizProjeto)
+        .asScala.filter(_.getSuperclass().equals(classOf[ActiveRecordJob])).map(classe => {
+          val nomeJob = s"${classe.getSimpleName.replaceAll("Job", "").toLowerCase}"
+          val instanciaConfig = classe.newInstance.asInstanceOf[ActiveRecordJob]
+          val jobDetail = new org.quartz.JobDetail
+          jobDetail.setName(nomeJob)
+          jobDetail.setJobClass(classe)
+          val cronTrigger = new org.quartz.CronTrigger
+          cronTrigger.setName(s"${nomeJob}Trigger")
+          cronTrigger.setJobName(jobDetail.getName)
+          cronTrigger.setStartTime(JCalendar.getInstance.getTime)
+          cronTrigger.setCronExpression(instanciaConfig.expressaoCronFrequenciaExecucao)
+          scheduler.addJob(jobDetail, JBoolean.TRUE)
+          scheduler.scheduleJob(cronTrigger)
+          println(s"Classe '${classe.getName}' agendada como job '${nomeJob}'")
+      })
+      contexto.getBeanFactory.registerSingleton("scheduler", scheduler)
+    }
+    this.contexto = contexto
+    if(ativarServidorWeb) {
+      val server = contexto.getBean("server").asInstanceOf[Server]
       server.start
       server.join
     }
   }
   private lazy val formatoData = "dd/MM/yyyy HH:mm:ss"
-  lazy val dao = ContextoAplicacao.contexto.getBean(classOf[DAOSimples])
+  lazy val dao = this.contexto.getBean(classOf[DAOSimples])
   lazy val gson = (new com.google.gson.GsonBuilder).disableHtmlEscaping
     .setDateFormat(formatoData).serializeNulls.setPrettyPrinting.create
   lazy val sdf = new java.text.SimpleDateFormat(formatoData)
+}
+
+abstract class ActiveRecordJob extends org.quartz.Job {
+  
+  protected lazy val logger: Logger = Logger.getLogger(this.getClass)
+  
+  def executar
+  def expressaoCronFrequenciaExecucao: String
+  
+  override def execute(context: org.quartz.JobExecutionContext): Unit = {
+    val loggerActiveRecord = Logger.getLogger(classOf[ActiveRecordJob])
+    loggerActiveRecord.debug(s"Executando Job '${this.getClass.getSimpleName}'...")
+    val tempo = JCalendar.getInstance.getTimeInMillis
+    this.executar
+    loggerActiveRecord.debug(s"Fim da execução do Job '${this.getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos")
+  }
+  
 }
 
 case class HBM2DDL(valor: String)

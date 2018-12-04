@@ -19,6 +19,7 @@ object HumbleApp extends App {
   val formatarSQL: JBoolean = true
   val usarOtimizadorReflection: JBoolean = true
   val diretorioResourcesWebApp: String = "src/main/webapp"
+  val ativarJobManager: JBoolean = true
 
   ContextoAplicacao.iniciar(
     ativarServidorWeb,
@@ -34,7 +35,8 @@ object HumbleApp extends App {
     exibirSQL,
     formatarSQL,
     usarOtimizadorReflection,
-    diretorioResourcesWebApp
+    diretorioResourcesWebApp,
+    ativarJobManager
   )
 
 }
