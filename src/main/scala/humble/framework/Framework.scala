@@ -49,7 +49,7 @@ abstract class ActiveRecordModel extends Serializable {
               case CONST_ANNOTATION_ID_JPA => atributos(posicao)
               case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
                 case Success(annotation) => annotation.asInstanceOf[JAttribute]
-                case Failure(ex) => throw new IllegalAccessException(
+                case Failure(ex) => throw new Exception(
                   s"Atributo com @javax.persistence.Id inexistente na entidade '${this.getClass.getSimpleName}'"
                 )
               }
@@ -60,7 +60,7 @@ abstract class ActiveRecordModel extends Serializable {
     saida.setAccessible(true)
     saida
   }
-  def salvar = {
+  def salvar: Any = {
     val primaryKey = Try(this.chavePrimaria.get(this)) match {
       case Success(valor) => Option(valor)
       case Failure(ex) => None
@@ -69,8 +69,9 @@ abstract class ActiveRecordModel extends Serializable {
       case Some(pk) => ContextoAplicacao.dao.atualizar(this)
       case None => ContextoAplicacao.dao.criar(this)
     }
+    this
   }
-  def apagar = ContextoAplicacao.dao.apagar(this)
+  def apagar: Any = ContextoAplicacao.dao.apagar(this)
   def recarregar: Option[Any] = {
     Try(this.chavePrimaria.get(this)) match {
       case Success(valor) => Option(ContextoAplicacao.dao.buscarPorPK(this.getClass, valor))
@@ -127,30 +128,37 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
     contentType = "application/json"
   }
 
-  get("/buscar/:pk") {
+  private def recuperarInstanciaDaPKStr(pk: String): M = {
     // FIXME Cara, isso tá porco
     var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
     val pk = params.get("pk").get
     val pkNormalizada = instancia.chavePrimaria.getType.getSimpleName match {
-      case "Long" =>            pk.toLong
+      case "Long"            => pk.toLong
       case "Integer" | "Int" => pk.toInt
-      case "Byte" =>            pk.toByte
-      case "Boolean" =>         pk.toBoolean
-      case "Double" =>          pk.toDouble
-      case "Float" =>           pk.toFloat
-      case "Short" =>           pk.toShort
-      case "Character" =>       pk.toCharArray()(0)
-      case "String" =>          pk
+      case "Byte"            => pk.toByte
+      case "Boolean"         => pk.toBoolean
+      case "Double"          => pk.toDouble
+      case "Float"           => pk.toFloat
+      case "Short"           => pk.toShort
+      case "Character"       => pk.toCharArray()(0)
+      case "String"          => pk
       case "Date" => ContextoAplicacao.sdf.parse(pk)
       case _ => pk.asInstanceOf[java.lang.Object]
     }
     instancia.chavePrimaria.set(instancia, pkNormalizada)
     instancia.recarregar match {
-      case Some(instancia: M) => Ok(instancia.json)
-      case None => Ok(ContextoAplicacao.gson.toJson("Nenhum registro encontrado."))
+      case Some(instanciaOk: M) => instanciaOk
+      case None => throw new Exception("Nenhum registro encontrado.")
     }
   }
-
+  
+  get("/buscar/:pk") {
+    Try(this.recuperarInstanciaDaPKStr(params.get("pk").get)) match {
+      case Success(instancia: M) => Ok(instancia.json)
+      case Failure(ex) => Ok(ContextoAplicacao.gson.toJson(ex.getMessage))
+    }
+  }
+  
   post("/listar") {
     val registros = params.getAsOrElse[Long]("registros", Integer.MAX_VALUE)
     val pagina = params.getAsOrElse[Int]("pagina", 1)
@@ -168,23 +176,15 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
 
   post("/salvar") {
     Try(ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)) match {
-      case Success(instancia: M) => {
-        instancia.salvar
-        Ok(instancia.json)
-      }
+      case Success(instancia: M) => Ok(instancia.salvar.asInstanceOf[M].json)
       case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
     }
   }
-
+  
   delete("/apagar/:pk") {
-    var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
-    instancia.chavePrimaria.set(instancia, params.get("pk").get)
-    instancia.recarregar match {
-      case Some(temp: M) => {
-        temp.apagar
-        Ok(temp.json)
-      }
-      case None => Ok(ContextoAplicacao.gson.toJson("Nenhum registro encontrado."))
+    Try(this.recuperarInstanciaDaPKStr(params.get("pk").get)) match {
+      case Success(instancia: M) => Ok(instancia.apagar.asInstanceOf[M].json)
+      case Failure(ex) => Ok(ContextoAplicacao.gson.toJson(ex.getMessage))
     }
   }
 
@@ -202,7 +202,10 @@ class DAOSimples {
   def atualizar(instancia: Any) = this.entityManager.merge(instancia)
 
   @Transactional(readOnly = false)
-  def apagar(instancia: Any) = this.entityManager.remove(this.entityManager.merge(instancia))
+  def apagar(instancia: Any): Any = {
+    this.entityManager.remove(this.entityManager.merge(instancia))
+    instancia
+  }
 
   @Transactional(readOnly = true)
   def buscarPorPK(classe: Class[_], pk: Any): Any = this.entityManager.find(classe, pk)
