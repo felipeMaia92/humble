@@ -152,14 +152,14 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
       case None => throw new IllegalStateException("Nenhum registro encontrado.")
     }
   }
-  
+
   get("/buscar/:pk") {
     Try(this.recuperarInstanciaDaPKStr(params.get("pk").get)) match {
       case Success(instancia: M) => Ok(instancia.json)
       case Failure(ex) => Ok(ContextoAplicacao.gson.toJson(ex.getMessage))
     }
   }
-  
+
   post("/listar") {
     val registros = params.getAsOrElse[Long]("registros", Integer.MAX_VALUE)
     val pagina = params.getAsOrElse[Int]("pagina", 1)
@@ -181,7 +181,7 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
       case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
     }
   }
-  
+
   delete("/apagar/:pk") {
     Try(this.recuperarInstanciaDaPKStr(params.get("pk").get)) match {
       case Success(instancia: M) => Ok(instancia.apagar.asInstanceOf[M].json)
@@ -291,6 +291,7 @@ object ContextoAplicacao {
       diretorioResourcesWebApp: String,
       ativarJobManager: JBoolean
   ) = {
+    val logger = Logger.getLogger(this.getClass)
     val configuracaoAutomatica = {
       val properties = new JProperties
       properties.load(this.getClass.getClassLoader.getResourceAsStream("configuracoes.properties"))
@@ -352,7 +353,7 @@ object ContextoAplicacao {
           cronTrigger.setCronExpression(instanciaConfig.expressaoCronFrequenciaExecucao)
           scheduler.addJob(jobDetail, JBoolean.TRUE)
           scheduler.scheduleJob(cronTrigger)
-          println(s"Classe '${classe.getName}' agendada como job '${nomeJob}'")
+          logger.info(s"Classe '${classe.getName}' agendada como job '${nomeJob}'")
       })
       contexto.getBeanFactory.registerSingleton("scheduler", scheduler)
     }
@@ -371,12 +372,12 @@ object ContextoAplicacao {
 }
 
 abstract class ActiveRecordJob extends org.quartz.Job {
-  
+
   protected lazy val logger: Logger = Logger.getLogger(this.getClass)
-  
+
   def executar
   def expressaoCronFrequenciaExecucao: String
-  
+
   override def execute(context: org.quartz.JobExecutionContext): Unit = {
     val loggerActiveRecord = Logger.getLogger(classOf[ActiveRecordJob])
     loggerActiveRecord.debug(s"Executando Job '${this.getClass.getSimpleName}'...")
@@ -384,7 +385,7 @@ abstract class ActiveRecordJob extends org.quartz.Job {
     this.executar
     loggerActiveRecord.debug(s"Fim da execução do Job '${this.getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos")
   }
-  
+
 }
 
 case class HBM2DDL(valor: String)
