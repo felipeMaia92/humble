@@ -52,17 +52,17 @@ abstract class ActiveRecordModel extends Serializable {
         .map(_.annotationType match {
           case CONST_ANNOTATION_ID_JPA => atributos(posicao)
           case _ => Try(buscarCampoPKRecursivamente(posicao = posicao + 1)) match {
-            case Success(annotation) => {
-              val saida = annotation.asInstanceOf[JAttribute]
-              saida.setAccessible(true)
-              saida
-            }
+            case Success(annotation) => annotation.asInstanceOf[JAttribute]
             case Failure(ex) => throw new IllegalStateException(
               s"Atributo com @javax.persistence.Id inexistente na entidade '${getClass.getSimpleName}'"
             )
           }}).head
   }
-  @transient lazy val chavePrimaria = buscarCampoPKRecursivamente()
+  @transient lazy val chavePrimaria = {
+    val pk = buscarCampoPKRecursivamente()
+    pk.setAccessible(true)
+    pk
+  }
   def salvar: Any = Try(chavePrimaria.get(this)).toOption match {
       case Some(pk) => ContextoAplicacao.dao.atualizar(this)
       case None => ContextoAplicacao.dao.criar(this)
@@ -73,7 +73,7 @@ abstract class ActiveRecordModel extends Serializable {
       case Failure(ex) => None
     }
   private def removerChavePrimariaFiltro: Any = {
-    val tempChavePrimaria = Option(chavePrimaria.get(this)).map(x => { })
+    val tempChavePrimaria = chavePrimaria.get(this)
     chavePrimaria.set(this, null)
     tempChavePrimaria
   }
@@ -124,7 +124,17 @@ case class ErroRest(mensagem: String, detalhes: String = null) {
       sw.toString.split("\n").head
     })
 }
-case class RespostaFiltroRest(lista: JList[Object], registros: Long, totalRegistros: Long, paginaAtual: Integer, totalPaginas: Integer)
+case class RespostaFiltroRest(qtdRegistros: Long, totalRegistros: Long, paginaAtual: Integer, totalPaginas: Integer, registros: JList[Object]) {
+  def this(lista: JList[_], pagina: Integer, registros: Long, totalRegistros: Long) =
+    this(
+      qtdRegistros = lista.size.toLong,
+      totalRegistros = totalRegistros,
+      paginaAtual = pagina,
+      totalPaginas = (totalRegistros / registros).toInt + (if(totalRegistros % registros != 0) 1 else 0),
+      registros = lista.asInstanceOf[JList[Object]]
+    )
+
+}
 abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
 
   private lazy final val CONST_MENSAGEM_ERRO_BUSCAR_PK = "Ocorreu um erro ao buscar o registro."
@@ -135,7 +145,7 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
     contentType = "application/json"
   }
 
-  private def criarErroRest(mensagem: String, ex: Option[Throwable] = None) =
+  private def erroRest(mensagem: String, ex: Option[Throwable] = None) =
     ContextoAplicacao.gson.toJson(ex match {
       case Some(e) => {
         logger.error(mensagem, e)
@@ -170,8 +180,8 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
     Try(recuperarInstanciaDaPKStr) match {
       case Success(instancia: M) => Ok(instancia.json)
       case Failure(ex) => ex match {
-        case _: NenhumRegistroException => NotFound(criarErroRest(ex.getMessage, None))
-        case _ => InternalServerError(criarErroRest(CONST_MENSAGEM_ERRO_BUSCAR_PK, Some(ex)))
+        case _: NenhumRegistroException => NotFound(erroRest(ex.getMessage, None))
+        case _ => InternalServerError(erroRest(CONST_MENSAGEM_ERRO_BUSCAR_PK, Some(ex)))
       }
     }
   }
@@ -183,11 +193,8 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
       case 0 => tag.runtimeClass.newInstance.asInstanceOf[M]
       case _ => ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)
     }
-    val lista = filtro.listarComoFiltro(registros.toInt, pagina).asInstanceOf[JList[Object]]
-    val totalRegistros = filtro.contarComoFiltro
-    val parcialTotalPaginas = (totalRegistros / registros).toInt
     Ok(ContextoAplicacao.gson.toJson(
-      RespostaFiltroRest(lista, lista.size.toLong, totalRegistros, pagina,parcialTotalPaginas + (if(totalRegistros % registros != 0) 1 else 0))
+      new RespostaFiltroRest(filtro.listarComoFiltro(registros.toInt, pagina), pagina, registros, filtro.contarComoFiltro)
     ))
   }
 
