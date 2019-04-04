@@ -2,10 +2,14 @@ package humble.framework
 
 import scala.reflect.ClassTag
 import scala.util.{ Try, Success, Failure }
-import java.lang.{ Boolean => JBoolean }
+import java.lang.{
+  Boolean => JBoolean, Long => JLong, Integer => JInteger, Float => JFloat,
+  Short => JShort, Byte => JByte, Double => JDouble, Character => JChar
+}
 import java.lang.reflect.{ Field => JAttribute }
 import java.io.{ Serializable => JSerial, File => JFile }
-import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties, Calendar => JCalendar }
+import java.util.{ List => JList, ArrayList => JArrayList, Properties => JProperties, Calendar => JCalendar, Date => JDate }
+import java.util.concurrent.Executors
 import javax.persistence.{ PersistenceContext, EntityManager, EntityManagerFactory, Transient, Query }
 import javax.sql.DataSource
 import org.apache.log4j.Logger
@@ -13,10 +17,12 @@ import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.servlet.{ DefaultServlet, ServletContextHandler }
 import org.eclipse.jetty.webapp.WebAppContext
 import org.hibernate.jpa.HibernatePersistenceProvider
-import org.scalatra.{ Ok, BadRequest }
+import org.scalatra._
 import org.scalatra.servlet.ScalatraListener
 import org.springframework.context.ApplicationContext
-import org.springframework.context.annotation.{ Bean, Configuration, ComponentScan, Import, AnnotationConfigApplicationContext }
+import org.springframework.context.annotation.{
+  Bean, Configuration, ComponentScan, Import, AnnotationConfigApplicationContext
+}
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.orm.jpa.{ LocalContainerEntityManagerFactoryBean, JpaTransactionManager }
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter
@@ -26,74 +32,61 @@ import org.springframework.stereotype.{ Repository => DAO, Component => WiredSpr
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ Map => MapMutavel }
 
-class ActiveLifeCycle extends org.scalatra.LifeCycle {
-  lazy val logger = Logger.getLogger(classOf[ActiveLifeCycle])
-  override def init(context: javax.servlet.ServletContext) {
-    HackGetClassesProjeto.listarClassesNaPackage(ContextoAplicacao.packageRaizProjeto)
-      .asScala.filter(_.getSuperclass().equals(classOf[ActiveRecordRest[_]])).map(classe => {
+class ActiveRecordLifeCycle extends org.scalatra.LifeCycle {
+  lazy val logger = Logger.getLogger(classOf[ActiveRecordLifeCycle])
+  override def init(context: javax.servlet.ServletContext) =
+    ContextoAplicacao.classesNaPackage.filter(_.getSuperclass == classOf[ActiveRecordRest[_]])
+      .map(classe => {
         val mapeamentoEndpointUrl = s"/${classe.getSimpleName.replaceAll("Rest", "").toLowerCase}/*"
         context.mount(classe, mapeamentoEndpointUrl)
-        this.logger.info(s"Classe '${classe.getName}' montada com o endpoint '${mapeamentoEndpointUrl}'")
-    })
-  }
+        logger.info(s"Classe '${classe.getName}' montada com o endpoint '${mapeamentoEndpointUrl}'")
+      })
 }
 
 abstract class ActiveRecordModel extends Serializable {
-  @transient lazy val chavePrimaria: JAttribute = {
-    def buscarPKNoAtributo(posicao: Int): JAttribute = {
-      lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
-      val atributos: List[JAttribute] = this.getClass.getDeclaredFields.toList
-      atributos(posicao).getDeclaredAnnotations.toList
-        .filter(_.annotationType.equals(classOf[javax.persistence.Id]))
-          .map(
-            _.annotationType match {
-              case CONST_ANNOTATION_ID_JPA => atributos(posicao)
-              case _ => Try(buscarPKNoAtributo(posicao + 1)) match {
-                case Success(annotation) => annotation.asInstanceOf[JAttribute]
-                case Failure(ex) => throw new IllegalStateException(
-                  s"Atributo com @javax.persistence.Id inexistente na entidade '${this.getClass.getSimpleName}'"
-                )
-              }
+  private def buscarCampoPKRecursivamente(posicao: Int = 0): JAttribute = {
+    lazy val CONST_ANNOTATION_ID_JPA = classOf[javax.persistence.Id]
+    val atributos: List[JAttribute] = getClass.getDeclaredFields.toList
+    atributos(posicao).getDeclaredAnnotations.toList
+      .filter(_.annotationType.equals(classOf[javax.persistence.Id]))
+        .map(_.annotationType match {
+          case CONST_ANNOTATION_ID_JPA => atributos(posicao)
+          case _ => Try(buscarCampoPKRecursivamente(posicao = posicao + 1)) match {
+            case Success(annotation) => {
+              val saida = annotation.asInstanceOf[JAttribute]
+              saida.setAccessible(true)
+              saida
             }
-          ).head
-    }
-    val saida = buscarPKNoAtributo(0)
-    saida.setAccessible(true)
-    saida
+            case Failure(ex) => throw new IllegalStateException(
+              s"Atributo com @javax.persistence.Id inexistente na entidade '${getClass.getSimpleName}'"
+            )
+          }}).head
   }
-  def salvar: Any = {
-    val primaryKey = Try(this.chavePrimaria.get(this)) match {
-      case Success(valor) => Option(valor)
-      case Failure(ex) => None
-    }
-    primaryKey match {
+  @transient lazy val chavePrimaria = buscarCampoPKRecursivamente()
+  def salvar: Any = Try(chavePrimaria.get(this)).toOption match {
       case Some(pk) => ContextoAplicacao.dao.atualizar(this)
       case None => ContextoAplicacao.dao.criar(this)
     }
-    this
-  }
   def apagar: Any = ContextoAplicacao.dao.apagar(this)
-  def recarregar: Option[Any] = {
-    Try(this.chavePrimaria.get(this)) match {
-      case Success(valor) => Option(ContextoAplicacao.dao.buscarPorPK(this.getClass, valor))
+  def recarregar: Option[Any] = Try(chavePrimaria.get(this)) match {
+      case Success(valor) => Option(ContextoAplicacao.dao.buscarPorPK(getClass, valor))
       case Failure(ex) => None
     }
-  }
-  private def removerChavePrimariaFiltro(instancia: Any): Any = {
-    val tempChavePrimaria = this.chavePrimaria.get(this)
-    this.chavePrimaria.set(this, null)
+  private def removerChavePrimariaFiltro: Any = {
+    val tempChavePrimaria = Option(chavePrimaria.get(this)).map(x => { })
+    chavePrimaria.set(this, null)
     tempChavePrimaria
   }
   def listarComoFiltro(registros: Integer = Integer.MAX_VALUE, pagina: Integer = 1): JList[_] = {
-    val pk = this.removerChavePrimariaFiltro(this)
+    val pk = removerChavePrimariaFiltro
     val lista = ContextoAplicacao.dao.listarComFiltro(this, registros, pagina)
-    this.chavePrimaria.set(this, pk)
+    chavePrimaria.set(this, pk)
     lista
   }
   def contarComoFiltro: Long = {
-    val pk = this.removerChavePrimariaFiltro(this)
+    val pk = removerChavePrimariaFiltro
     val contador = ContextoAplicacao.dao.contarComFiltro(this)
-    this.chavePrimaria.set(this, pk)
+    chavePrimaria.set(this, pk)
     contador
   }
   def json: String = ContextoAplicacao.gson.toJson(this)
@@ -105,14 +98,14 @@ abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: Class
   def listarComFiltro(filtro: M, registros: Integer = Integer.MAX_VALUE, pagina: Integer = 1): List[M] = {
     Option(filtro) match {
       case Some(instancia) => ContextoAplicacao.dao.listarComFiltro(instancia, registros, pagina).asInstanceOf[JList[M]].asScala.toList
-      case None => this.listarTodos()
+      case None => listarTodos()
     }
   }
   def contarTodos: Long = ContextoAplicacao.dao.contarTodos(tag.runtimeClass)
   def contarComFiltro(filtro: M): Long = {
     Option(filtro) match {
       case Some(instancia) => ContextoAplicacao.dao.contarComFiltro(filtro)
-      case None => this.contarTodos
+      case None => contarTodos
     }
   }
   def buscarPorPK(pk: Any): Option[M] = Try(ContextoAplicacao.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]) match {
@@ -122,41 +115,64 @@ abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: Class
   def fromJson(json: String): M = ContextoAplicacao.gson.fromJson(json, tag.runtimeClass)
 }
 
+class NenhumRegistroException extends IllegalAccessException("Nenhum registro encontrado.")
+case class ErroRest(mensagem: String, detalhes: String = null) {
+  def this(mensagem: String, ex: Throwable) =
+    this(mensagem = mensagem, detalhes = {
+      val sw = new java.io.StringWriter
+      ex.printStackTrace(new java.io.PrintWriter(sw))
+      sw.toString.split("\n").head
+    })
+}
 case class RespostaFiltroRest(lista: JList[Object], registros: Long, totalRegistros: Long, paginaAtual: Integer, totalPaginas: Integer)
 abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
+
+  private lazy final val CONST_MENSAGEM_ERRO_BUSCAR_PK = "Ocorreu um erro ao buscar o registro."
+
+  lazy val logger = Logger.getLogger(getClass)
 
   before() {
     contentType = "application/json"
   }
 
-  private def recuperarInstanciaDaPKStr(pk: String): M = {
-    // FIXME Cara, isso tá porco
+  private def criarErroRest(mensagem: String, ex: Option[Throwable] = None) =
+    ContextoAplicacao.gson.toJson(ex match {
+      case Some(e) => {
+        logger.error(mensagem, e)
+        new ErroRest(mensagem, e)
+      }
+      case None => ErroRest(mensagem)
+    })
+
+  private def recuperarInstanciaDaPKStr: M = {
     var instancia: M = tag.runtimeClass.newInstance.asInstanceOf[M]
     val pk = params.get("pk").get
-    val pkNormalizada = instancia.chavePrimaria.getType.getSimpleName match {
-      case "Long"            => pk.toLong
-      case "Integer" | "Int" => pk.toInt
-      case "Byte"            => pk.toByte
-      case "Boolean"         => pk.toBoolean
-      case "Double"          => pk.toDouble
-      case "Float"           => pk.toFloat
-      case "Short"           => pk.toShort
-      case "Character"       => pk.toCharArray()(0)
-      case "String"          => pk
-      case "Date" => ContextoAplicacao.sdf.parse(pk)
+    instancia.chavePrimaria.set(instancia, instancia.chavePrimaria.getType match {
+      case _long if(_long == classOf[Long] || _long == classOf[JLong]) => pk.toLong
+      case _integer if(_integer == classOf[Integer] || _integer == classOf[JInteger]) => pk.toInt
+      case _byte if(_byte == classOf[Byte] || _byte == classOf[JByte]) => pk.toByte
+      case _boolean if(_boolean == classOf[Boolean] || _boolean == classOf[JBoolean]) => pk.toBoolean
+      case _double if(_double == classOf[Double] || _double == classOf[JDouble]) => pk.toDouble
+      case _float if(_float == classOf[Float] || _float == classOf[JFloat]) => pk.toFloat
+      case _short if(_short == classOf[Short] || _short == classOf[JShort]) => pk.toShort
+      case _character if(_character == classOf[Character] || _character == classOf[JChar]) => pk.toCharArray()(0)
+      case _string if(_string == classOf[String]) => pk
+      // TODO Existem muitos outros tipo para incluir
       case _ => pk.asInstanceOf[java.lang.Object]
-    }
-    instancia.chavePrimaria.set(instancia, pkNormalizada)
+    })
     instancia.recarregar match {
       case Some(instanciaOk: M) => instanciaOk
-      case None => throw new IllegalStateException("Nenhum registro encontrado.")
+      case None => throw new NenhumRegistroException
     }
   }
 
   get("/buscar/:pk") {
-    Try(this.recuperarInstanciaDaPKStr(params.get("pk").get)) match {
+    Try(recuperarInstanciaDaPKStr) match {
       case Success(instancia: M) => Ok(instancia.json)
-      case Failure(ex) => Ok(ContextoAplicacao.gson.toJson(ex.getMessage))
+      case Failure(ex) => ex match {
+        case _: NenhumRegistroException => NotFound(criarErroRest(ex.getMessage, None))
+        case _ => InternalServerError(criarErroRest(CONST_MENSAGEM_ERRO_BUSCAR_PK, Some(ex)))
+      }
     }
   }
 
@@ -183,7 +199,7 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
   }
 
   delete("/apagar/:pk") {
-    Try(this.recuperarInstanciaDaPKStr(params.get("pk").get)) match {
+    Try(recuperarInstanciaDaPKStr) match {
       case Success(instancia: M) => Ok(instancia.apagar.asInstanceOf[M].json)
       case Failure(ex) => Ok(ContextoAplicacao.gson.toJson(ex.getMessage))
     }
@@ -197,33 +213,36 @@ class DAOSimples {
   var entityManager: EntityManager = _
 
   @Transactional(readOnly = false)
-  def criar(instancia: Any) = this.entityManager.persist(instancia)
+  def criar(instancia: Any) = {
+    entityManager.persist(instancia)
+    instancia
+  }
 
   @Transactional(readOnly = false)
-  def atualizar(instancia: Any) = this.entityManager.merge(instancia)
+  def atualizar(instancia: Any) = entityManager.merge(instancia)
 
   @Transactional(readOnly = false)
   def apagar(instancia: Any): Any = {
-    this.entityManager.remove(this.entityManager.merge(instancia))
+    entityManager.remove(entityManager.merge(instancia))
     instancia
   }
 
   @Transactional(readOnly = true)
-  def buscarPorPK(classe: Class[_], pk: Any): Any = this.entityManager.find(classe, pk)
+  def buscarPorPK(classe: Class[_], pk: Any): Any = entityManager.find(classe, pk)
 
   @Transactional(readOnly = true)
   def listarTodos(classe: Class[_], registros: Integer, pagina: Integer): JList[_] =
-    this.entityManager.createQuery(s"FROM ${classe.getSimpleName}").setFirstResult((pagina - 1) * registros).setMaxResults(registros).getResultList
+    entityManager.createQuery(s"FROM ${classe.getSimpleName}").setFirstResult((pagina - 1) * registros).setMaxResults(registros).getResultList
 
   @Transactional(readOnly = true)
   def listarComFiltro(filtro: Any, registros: Integer, pagina: Integer): JList[_] =
-    this.gerarQuerydaInstancia(filtro, "").setFirstResult((pagina - 1) * registros).setMaxResults(registros).getResultList
+    gerarQuerydaInstancia(filtro, "").setFirstResult((pagina - 1) * registros).setMaxResults(registros).getResultList
 
   @Transactional(readOnly = true)
-  def contarTodos(classe: Class[_]): Long = this.entityManager.createQuery(s"SELECT COUNT(t) FROM ${classe.getSimpleName} t").getSingleResult.asInstanceOf[Long]
+  def contarTodos(classe: Class[_]): Long = entityManager.createQuery(s"SELECT COUNT(t) FROM ${classe.getSimpleName} t").getSingleResult.asInstanceOf[Long]
 
   @Transactional(readOnly = true)
-  def contarComFiltro(filtro: Any): Long = this.gerarQuerydaInstancia(filtro, "SELECT COUNT(1)").getSingleResult.asInstanceOf[Long]
+  def contarComFiltro(filtro: Any): Long = gerarQuerydaInstancia(filtro, "SELECT COUNT(1)").getSingleResult.asInstanceOf[Long]
 
   private def gerarQuerydaInstancia(filtro: Any, prefixoHQL: String): Query = {
     lazy val CONST_ANNOTATION_COLUMN_JPA = classOf[javax.persistence.Column]
@@ -239,7 +258,10 @@ class DAOSimples {
                 Option(getOk) match {
                   case Some(valor) => {
                     if(!hql.toString.isEmpty) hql.append("AND ")
-                    if(atributo.getType.getName.endsWith(".String")) {
+
+
+                    // TODO Incluir novos tipos aqui
+                    if(atributo.getType == classOf[String]) {
                       hql.append(s"LOWER(${atributo.getName}) LIKE :${atributo.getName} ")
                       mapAtributoObjeto = mapAtributoObjeto + (atributo.getName -> s"%${valor.toString.replaceAll("\\s+", "%").toLowerCase}%")
                     }
@@ -247,6 +269,9 @@ class DAOSimples {
                       hql.append(s"${atributo.getName} = :${atributo.getName} ")
                       mapAtributoObjeto = mapAtributoObjeto + (atributo.getName -> valor)
                     }
+
+
+
                   }
                   case None => Unit
                 }
@@ -272,8 +297,19 @@ class DAOSimples {
 class ConfiguracaoSpringSimples
 
 object ContextoAplicacao {
+  protected lazy val logger: Logger = Logger.getLogger(getClass)
   private var contexto: ApplicationContext = null
   var packageRaizProjeto: String = null
+  var camadaRestInicializada = false
+
+  def classesNaPackage = {
+    val provider = new org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider(false)
+    provider.addIncludeFilter(new org.springframework.core.`type`.filter.RegexPatternTypeFilter(java.util.regex.Pattern.compile(".*")))
+    provider.findCandidateComponents(ContextoAplicacao.packageRaizProjeto).asScala.map(bean =>
+      Class.forName(bean.asInstanceOf[org.springframework.beans.factory.config.BeanDefinition].getBeanClassName)
+    ).toList
+  }
+
   def iniciar(
       ativarServidorWeb: JBoolean,
       portaWebApp: Integer,
@@ -291,10 +327,9 @@ object ContextoAplicacao {
       diretorioResourcesWebApp: String,
       ativarJobManager: JBoolean
   ) = {
-    val logger = Logger.getLogger(this.getClass)
     val configuracaoAutomatica = {
       val properties = new JProperties
-      properties.load(this.getClass.getClassLoader.getResourceAsStream("configuracoes.properties"))
+      properties.load(getClass.getClassLoader.getResourceAsStream("configuracoes.properties"))
       properties
     }
     val contexto = new AnnotationConfigApplicationContext(classOf[ConfiguracaoSpringSimples])
@@ -302,7 +337,7 @@ object ContextoAplicacao {
     dataSource.setDriverClassName(driverDialetoJPA.driver)
     val factory = new LocalContainerEntityManagerFactoryBean
     factory.setDataSource(dataSource)
-    this.packageRaizProjeto = Option(prefixoPackage).getOrElse(configuracaoAutomatica.getProperty("spring.package.scan"))
+    packageRaizProjeto = Option(prefixoPackage).getOrElse(configuracaoAutomatica.getProperty("spring.package.scan"))
     factory.setPackagesToScan(packageRaizProjeto)
     factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter)
     factory.setJpaProperties({
@@ -339,8 +374,7 @@ object ContextoAplicacao {
     if(ativarJobManager) {
       val scheduler = (new org.quartz.impl.StdSchedulerFactory).getScheduler
       scheduler.start
-      HackGetClassesProjeto.listarClassesNaPackage(ContextoAplicacao.packageRaizProjeto)
-        .asScala.filter(_.getSuperclass().equals(classOf[ActiveRecordJob])).map(classe => {
+      classesNaPackage.filter(_.getSuperclass.equals(classOf[ActiveRecordJob])).map(classe => {
           val nomeJob = s"${classe.getSimpleName.replaceAll("Job", "").toLowerCase}"
           val instanciaConfig = classe.newInstance.asInstanceOf[ActiveRecordJob]
           val jobDetail = new org.quartz.JobDetail
@@ -357,15 +391,27 @@ object ContextoAplicacao {
       })
       contexto.getBeanFactory.registerSingleton("scheduler", scheduler)
     }
-    this.contexto = contexto
+    ContextoAplicacao.contexto = contexto
     if(ativarServidorWeb) {
-      val server = contexto.getBean("server").asInstanceOf[Server]
-      server.start
-      server.join
+      Try(contexto.getBean("server").asInstanceOf[Server]) match {
+        case Success(server) =>
+          Executors.newCachedThreadPool.execute(new Runnable {
+            override def run = {
+              server.start
+              server.join
+            }
+          })
+        case Failure(ex) => {
+          ex.printStackTrace
+          logger.fatal(ex.getMessage)
+          System.exit(-1)
+        }
+      }
+
     }
   }
   private lazy val formatoData = "dd/MM/yyyy HH:mm:ss"
-  lazy val dao = this.contexto.getBean(classOf[DAOSimples])
+  lazy val dao = contexto.getBean(classOf[DAOSimples])
   lazy val gson = (new com.google.gson.GsonBuilder).disableHtmlEscaping
     .setDateFormat(formatoData).serializeNulls.setPrettyPrinting.create
   lazy val sdf = new java.text.SimpleDateFormat(formatoData)
@@ -373,17 +419,18 @@ object ContextoAplicacao {
 
 abstract class ActiveRecordJob extends org.quartz.Job {
 
-  protected lazy val logger: Logger = Logger.getLogger(this.getClass)
+  protected lazy val logger: Logger = Logger.getLogger(getClass)
 
   def executar
   def expressaoCronFrequenciaExecucao: String
 
   override def execute(context: org.quartz.JobExecutionContext): Unit = {
-    val loggerActiveRecord = Logger.getLogger(classOf[ActiveRecordJob])
-    loggerActiveRecord.debug(s"Executando Job '${this.getClass.getSimpleName}'...")
+    logger.debug(s"Executando Job '${getClass.getSimpleName}'...")
     val tempo = JCalendar.getInstance.getTimeInMillis
-    this.executar
-    loggerActiveRecord.debug(s"Fim da execução do Job '${this.getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos")
+    // FIXME Colocar um Try para não parar a execução
+    executar
+    //
+    logger.debug(s"Fim da execução do Job '${getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos")
   }
 
 }
