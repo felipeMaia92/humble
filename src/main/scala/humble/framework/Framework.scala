@@ -134,7 +134,9 @@ case class RespostaFiltroRest(qtdRegistros: Long, totalRegistros: Long, paginaAt
 abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
   private lazy final val CONST_MENSAGEM_ERRO_BUSCAR_PK = "Ocorreu um erro ao buscar o registro."
   lazy val logger = Logger.getLogger(getClass)
-  before() { contentType = "application/json" }
+  before() {
+    contentType = if(request.getRequestURI == request.getServletPath) "text/html" else "application/json"
+  }
   private def erroRest(mensagem: String, ex: Option[Throwable] = None) =
     ContextoAplicacao.gson.toJson(ex match {
       case Some(e) => { logger.error(mensagem, e)
@@ -160,6 +162,9 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
       case Some(instanciaOk: M) => instanciaOk
       case None => throw new NenhumRegistroException
     }
+  }
+  get("/") {
+    s"<h1>Olar ${tag.runtimeClass.getSimpleName}!</h1>"
   }
   get("/buscar/:pk") {
     Try(recuperarInstanciaDaPKStr) match {
@@ -233,14 +238,14 @@ class DAOSimples {
   def contarComFiltro(filtro: Any): Long = gerarQuerydaInstancia(filtro, "SELECT COUNT(1)").getSingleResult.asInstanceOf[Long]
 
   private def gerarQuerydaInstancia(filtro: Any, prefixoHQL: String): Query = {
-    var hql = new ListBuffer[String]()  
+    var hql = new ListBuffer[String]()
     var mapAtributoObjeto: MapMutavel[String, Any] = MapMutavel[String, Any]()
     filtro.getClass.getDeclaredFields.filter(_.getDeclaredAnnotations.toList.exists(_annt => {
         _annt.annotationType == classOf[javax.persistence.Column]    || _annt.annotationType == classOf[javax.persistence.ManyToOne] ||
         _annt.annotationType == classOf[javax.persistence.OneToMany] || _annt.annotationType == classOf[javax.persistence.ManyToMany]
     })).map(atributo => { atributo.setAccessible(true)
       Option(atributo.get(filtro)).map(valor => atributo.getType match {
-        case str if (str == classOf[String]) => 
+        case str if (str == classOf[String]) =>
           (s"LOWER(${atributo.getName}) LIKE :${atributo.getName}", s"%${valor.toString.replaceAll("\\s+", "%").toLowerCase}%")
         case mdl if (mdl.getSuperclass == classOf[ActiveRecordModel]) => { val childObj = valor.asInstanceOf[ActiveRecordModel]
           (s"${atributo.getName}.${childObj.chavePrimaria.getName} = :${atributo.getName}", childObj.chavePrimaria.get(childObj)) }
