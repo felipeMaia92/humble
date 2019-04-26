@@ -132,7 +132,11 @@ case class RespostaFiltroRest(qtdRegistros: Long, totalRegistros: Long, paginaAt
 
 }
 abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
-  private lazy final val CONST_MENSAGEM_ERRO_BUSCAR_PK = "Ocorreu um erro ao buscar o registro."
+  private lazy final val CONST_MENSAGEM_ERRO_BUSCAR_PK = "Não foi possível realizar a pesquisa."
+  private lazy final val CONST_MENSAGEM_ERRO_SALVAR_INVALIDO = "Requisição inválida."
+  private lazy final val CONST_MENSAGEM_ERRO_CRIAR = "Ocorreu um erro ao criar novo registro."
+  private lazy final val CONST_MENSAGEM_ERRO_ATUALIZAR = "Ocorreu um erro ao atualizar registro."
+  private lazy final val CONST_MENSAGEM_ERRO_APAGAR = "Ocorreu um erro ao apagar o registro."
   lazy val logger = Logger.getLogger(getClass)
   before() {
     contentType = if(request.getRequestURI == request.getServletPath) "text/html" else "application/json"
@@ -186,16 +190,28 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
       new RespostaFiltroRest(filtro.listarComoFiltro(registros.toInt, pagina), pagina, registros, filtro.contarComoFiltro)
     ))
   }
-  post("/salvar") {
+  put("/salvar") {
     Try(ContextoAplicacao.gson.fromJson(request.body, tag.runtimeClass)) match {
-      case Success(instancia: M) => Ok(instancia.salvar.asInstanceOf[M].json)
-      case Failure(ex) => BadRequest(ContextoAplicacao.gson.toJson(ex.getMessage))
+      case Success(instancia: M) => {
+        val isAtualizando = Option(instancia.chavePrimaria.get(instancia)).isDefined
+        Try(instancia.salvar) match {
+          case Success(salvo) => { val jsonObj = salvo.asInstanceOf[M].json
+            if(isAtualizando) Created(jsonObj) else Ok(jsonObj)
+          }
+          case Failure(ex) =>
+            InternalServerError(erroRest(
+              if(isAtualizando) CONST_MENSAGEM_ERRO_ATUALIZAR else CONST_MENSAGEM_ERRO_CRIAR,
+              Some(ex)
+            ))
+        }
+      }
+      case Failure(ex) => BadRequest(erroRest(CONST_MENSAGEM_ERRO_SALVAR_INVALIDO, Some(ex)))
     }
   }
   delete("/apagar/:pk") {
     Try(recuperarInstanciaDaPKStr) match {
       case Success(instancia: M) => Ok(instancia.apagar.asInstanceOf[M].json)
-      case Failure(ex) => Ok(ContextoAplicacao.gson.toJson(ex.getMessage))
+      case Failure(ex) => InternalServerError(erroRest(CONST_MENSAGEM_ERRO_APAGAR, Some(ex)))
     }
   }
 }

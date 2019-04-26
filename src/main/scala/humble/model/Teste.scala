@@ -17,8 +17,8 @@ class Teste extends ActiveRecordModel {
 
   @Column(name = "DESCRICAO", length = 16384, nullable = false)
   var descricao: String = _
-  
-  @OneToMany(fetch = FetchType.EAGER)
+
+  @OneToMany(fetch = FetchType.LAZY)
   @JoinColumn(name = "ID_FILHO_1")
   var filhos: JList[Filho] = null
 
@@ -27,6 +27,25 @@ class Teste extends ActiveRecordModel {
 object Teste extends ActiveRecordCompanion[Teste]
 
 class TesteRest extends ActiveRecordRest[Teste]
+
+@Entity
+@Table(name = "FILHO", schema = "PUBLIC")
+class Filho extends ActiveRecordModel {
+
+  @Id
+  @GeneratedValue
+  @Column(name = "ID_FILHO_2")
+  var idFilho: JLong = _
+
+  @Column(name = "AAA", length = 16384, nullable = false)
+  var aaa: String = _
+
+  @ManyToOne(fetch = FetchType.EAGER)
+  var teste: Teste = null
+
+}
+
+class FilhoRest extends ActiveRecordRest[Filho]
 
 /*
 class TesteJob extends ActiveRecordJob {
@@ -42,23 +61,3 @@ class TesteJob extends ActiveRecordJob {
 
 }
 */
-
-@Entity
-@Table(name = "FILHO", schema = "PUBLIC")
-class Filho extends ActiveRecordModel {
-
-  @Id
-  @GeneratedValue
-  @Column(name = "ID_FILHO_2")
-  var idFilho: JLong = _
-
-  @Column(name = "AAA", length = 16384, nullable = false)
-  var aaa: String = _
-  
-  @ManyToOne(fetch = FetchType.EAGER)
-  var teste: Teste = null
-
-}
-object Filho extends ActiveRecordCompanion[Filho]
-
-class FilhoRest extends ActiveRecordRest[Filho]
