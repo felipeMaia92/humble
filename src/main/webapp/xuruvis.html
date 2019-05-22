@@ -6,11 +6,15 @@
     <link rel="stylesheet" href="/css/bootstrap.min.css">
     <script src="/js/angular.min.js"></script>
     <script type="text/javascript">
-      angular.module('EstaticoApp', []).controller('EstaticoController', function($scope) {
-
+      angular.module('EstaticoApp', []).controller('EstaticoController', function($scope, $http) {
 
         $scope.oir = "OLAR ANGULARJS";
 
+        $http.post('/teste/listar', '').then(function(response) {
+          $scope.lista = response.data.registros;
+        }, function(erro) {
+          console.log(erro);
+        });
 
       });
     </script>
@@ -20,7 +24,21 @@
   <body ng-app="EstaticoApp">
     <div ng-controller="EstaticoController">
       <h1>Este &eacute; est&aacute;tico!</h1>
-      <p>{{oir}}</p>
+
+      <div class="container">
+        <div class="row" ng-repeat="x in lista">
+          <div class="col-sm">
+            {{x.idTeste}}
+          </div>
+          <div class="col-sm">
+            {{x.descricao}}
+          </div>
+          <div class="col-sm">
+            <span ng-repeat="y in x.filhos">{{y.aaa}}</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </body>
   <script src="/js/jquery-3.3.1.slim.min.js"></script>
