@@ -20,9 +20,8 @@ class Teste extends ActiveRecordModel {
   @Column(name = "DESCRICAO", length = 16384, nullable = false)
   var descricao: String = _
 
-  @OneToMany(fetch = FetchType.EAGER)
-  @JoinColumn(name = "ID_FILHO_1")
-  var filhos: JList[Filho] = null
+  @OneToMany(fetch = FetchType.EAGER, mappedBy = "teste")
+  @transient var filhos: JList[Filho] = null
 
 }
 
@@ -36,7 +35,7 @@ class Filho extends ActiveRecordModel {
 
   @Id
   @GeneratedValue
-  @Column(name = "ID_FILHO_2")
+  @Column(name = "ID_FILHO")
   var idFilho: JLong = _
 
   @Column(name = "AAA", length = 16384, nullable = false)
