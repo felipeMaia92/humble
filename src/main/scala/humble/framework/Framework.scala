@@ -37,12 +37,15 @@ class ActiveRecordLifeCycle extends org.scalatra.LifeCycle {
   lazy val logger = Logger.getLogger(classOf[ActiveRecordLifeCycle])
   override def init(context: javax.servlet.ServletContext) =
     ContextoAplicacao.classesNaPackage.filter(_.getSuperclass == classOf[ActiveRecordRest[_]]).map(classe => {
-      val mapeamentoEndpointUrl = s"/${classe.getSimpleName.replaceAll("Rest", "").toLowerCase}"
-      context.mount(classe, Option(mapeamentoEndpointUrl).filter(_ != "/home").getOrElse("/"))
-      logger.info(s"Classe '${classe.getName}' montada com o endpoint '${mapeamentoEndpointUrl}'")
+      val prefixoEndpoint = RestUtils.gerarPrefixoServletUrlDaClasse(classe)
+      context.mount(classe, prefixoEndpoint)
+      logger.info(s"Classe '${classe.getName}' montada com o endpoint '${prefixoEndpoint}'")
     })
 }
-
+object RestUtils {
+  def gerarPrefixoServletUrlDaClasse(classe: Class[_]) =
+    "/".concat(Option(classe.getSimpleName.replaceAll("Rest", "").toLowerCase).filter(_ != "home").getOrElse(""))
+}
 abstract class ActiveRecordModel extends Serializable {
   private def buscarCampoPKRecursivamente(posicao: Int = 0): JAttribute = {
     val atributos: List[JAttribute] = getClass.getDeclaredFields.toList
@@ -119,9 +122,10 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
   private lazy final val CONST_MENSAGEM_ERRO_CRIAR = "Ocorreu um erro ao criar novo registro."
   private lazy final val CONST_MENSAGEM_ERRO_ATUALIZAR = "Ocorreu um erro ao atualizar registro."
   private lazy final val CONST_MENSAGEM_ERRO_APAGAR = "Ocorreu um erro ao apagar o registro."
+  private lazy val PREFIXO_MAPEAMENTO_SERVLET = RestUtils.gerarPrefixoServletUrlDaClasse(getClass)
   lazy val logger = Logger.getLogger(getClass)
   before() {
-    contentType = if(request.getRequestURI == request.getServletPath) "text/html" else "application/json"
+    contentType = if(request.getRequestURI == PREFIXO_MAPEAMENTO_SERVLET) "text/html" else "application/json"
   }
   private def erroRest(mensagem: String, ex: Option[Throwable] = None) =
     ContextoAplicacao.gson.toJson(ex match {
@@ -380,10 +384,17 @@ abstract class ActiveRecordJob extends org.quartz.Job {
   def executar
   def expressaoCronFrequenciaExecucao: String
   override def execute(context: org.quartz.JobExecutionContext): Unit = {
+    def diferencaTempoEmSegundos(inicioEmMilis: Long) = (JCalendar.getInstance.getTimeInMillis - inicioEmMilis) / 1000d
     logger.debug(s"Executando Job '${getClass.getSimpleName}'...")
     val tempo = JCalendar.getInstance.getTimeInMillis
-    Try(executar).map(s => logger.debug(s"Fim da execução do Job '${getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos"))
-     .getOrElse(logger.error(s"Ocorreu um erro ao executar o Job '${getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos"))
+    Try(executar) match {
+      case Success(ok) =>
+        logger.debug(s"Fim da execução do Job '${getClass.getSimpleName}' em ${diferencaTempoEmSegundos(tempo)} segundos")
+      case Failure(ex) => {
+        ex.printStackTrace
+        logger.error(s"Ocorreu um erro ao executar o Job '${getClass.getSimpleName}' em ${diferencaTempoEmSegundos(tempo)} segundos: ${ex.getMessage}")
+      }
+    }
   }
 }
 case class HBM2DDL(valor: String)

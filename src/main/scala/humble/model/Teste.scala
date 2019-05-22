@@ -6,6 +6,8 @@ import org.apache.log4j.Logger
 import javax.persistence.{ Column, Entity, Id, GeneratedValue, Table, OneToMany, JoinColumn, FetchType, ManyToOne }
 import humble.framework.{ ActiveRecordModel, ActiveRecordCompanion, ActiveRecordRest, ActiveRecordJob }
 
+class HomeRest extends ActiveRecordRest[Teste]
+
 @Entity
 @Table(name = "TESTE", schema = "PUBLIC")
 class Teste extends ActiveRecordModel {
@@ -18,7 +20,7 @@ class Teste extends ActiveRecordModel {
   @Column(name = "DESCRICAO", length = 16384, nullable = false)
   var descricao: String = _
 
-  @OneToMany(fetch = FetchType.LAZY)
+  @OneToMany(fetch = FetchType.EAGER)
   @JoinColumn(name = "ID_FILHO_1")
   var filhos: JList[Filho] = null
 
@@ -47,7 +49,6 @@ class Filho extends ActiveRecordModel {
 
 class FilhoRest extends ActiveRecordRest[Filho]
 
-/*
 class TesteJob extends ActiveRecordJob {
 
   override def executar = {
@@ -60,4 +61,3 @@ class TesteJob extends ActiveRecordJob {
   override def expressaoCronFrequenciaExecucao: String = "0 0/1 * 1/1 * ? *"
 
 }
-*/
