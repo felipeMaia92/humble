@@ -36,12 +36,11 @@ import scala.collection.mutable.{ Map => MapMutavel }
 class ActiveRecordLifeCycle extends org.scalatra.LifeCycle {
   lazy val logger = Logger.getLogger(classOf[ActiveRecordLifeCycle])
   override def init(context: javax.servlet.ServletContext) =
-    ContextoAplicacao.classesNaPackage.filter(_.getSuperclass == classOf[ActiveRecordRest[_]])
-      .map(classe => {
-        val mapeamentoEndpointUrl = s"/${classe.getSimpleName.replaceAll("Rest", "").toLowerCase}/*"
-        context.mount(classe, mapeamentoEndpointUrl)
-        logger.info(s"Classe '${classe.getName}' montada com o endpoint '${mapeamentoEndpointUrl}'")
-      })
+    ContextoAplicacao.classesNaPackage.filter(_.getSuperclass == classOf[ActiveRecordRest[_]]).map(classe => {
+      val mapeamentoEndpointUrl = s"/${classe.getSimpleName.replaceAll("Rest", "").toLowerCase}"
+      context.mount(classe, Option(mapeamentoEndpointUrl).filter(_ != "/home").getOrElse("/"))
+      logger.info(s"Classe '${classe.getName}' montada com o endpoint '${mapeamentoEndpointUrl}'")
+    })
 }
 
 abstract class ActiveRecordModel extends Serializable {
@@ -51,11 +50,11 @@ abstract class ActiveRecordModel extends Serializable {
       .filter(_.annotationType.equals(classOf[javax.persistence.Id]))
         .map(_.annotationType match {
           case id if(id == classOf[javax.persistence.Id]) => atributos(posicao)
-          case _ => Try(buscarCampoPKRecursivamente(posicao = posicao + 1)) match {
-            case Success(annotation) => annotation.asInstanceOf[JAttribute]
-            case Failure(ex) => throw new IllegalStateException(
+          case _ => Try(buscarCampoPKRecursivamente(posicao = posicao + 1))
+            .map(_.asInstanceOf[JAttribute]).getOrElse(throw new IllegalStateException(
               s"Atributo com @javax.persistence.Id inexistente na entidade '${getClass.getSimpleName}'"
-            )}}).head
+            ))
+         }).head
   }
   @transient lazy val chavePrimaria =  Option(buscarCampoPKRecursivamente()).map(pk => { pk.setAccessible(true)
     pk }).getOrElse(null)
@@ -91,23 +90,11 @@ abstract class ActiveRecordModel extends Serializable {
 abstract class ActiveRecordCompanion[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends javax.servlet.http.HttpServlet {
   def listarTodos(registros: Integer = Integer.MAX_VALUE, pagina: Integer = 1): List[M] =
     ContextoAplicacao.dao.listarTodos(tag.runtimeClass, registros, pagina).asInstanceOf[JList[M]].asScala.toList
-  def listarComFiltro(filtro: M, registros: Integer = Integer.MAX_VALUE, pagina: Integer = 1): List[M] = {
-    Option(filtro) match {
-      case Some(instancia) => ContextoAplicacao.dao.listarComFiltro(instancia, registros, pagina).asInstanceOf[JList[M]].asScala.toList
-      case None => listarTodos()
-    }
-  }
+  def listarComFiltro(filtro: M, registros: Integer = Integer.MAX_VALUE, pagina: Integer = 1): List[M] =
+    Option(filtro).map(ContextoAplicacao.dao.listarComFiltro(_, registros, pagina).asInstanceOf[JList[M]].asScala.toList).getOrElse(listarTodos())
   def contarTodos: Long = ContextoAplicacao.dao.contarTodos(tag.runtimeClass)
-  def contarComFiltro(filtro: M): Long = {
-    Option(filtro) match {
-      case Some(instancia) => ContextoAplicacao.dao.contarComFiltro(filtro)
-      case None => contarTodos
-    }
-  }
-  def buscarPorPK(pk: Any): Option[M] = Try(ContextoAplicacao.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]) match {
-    case Success(instancia) => Option(instancia)
-    case Failure(ex) => None
-  }
+  def contarComFiltro(filtro: M): Long = Option(filtro).map(i => ContextoAplicacao.dao.contarComFiltro(filtro)).getOrElse(contarTodos)
+  def buscarPorPK(pk: Any): Option[M] = Try(ContextoAplicacao.dao.buscarPorPK(tag.runtimeClass, pk).asInstanceOf[M]).map(x => Option(x)).getOrElse(None)
   def fromJson(json: String): M = ContextoAplicacao.gson.fromJson(json, tag.runtimeClass)
 }
 
@@ -122,14 +109,9 @@ case class ErroRest(mensagem: String, detalhes: String = null) {
 }
 case class RespostaFiltroRest(qtdRegistros: Long, totalRegistros: Long, paginaAtual: Integer, totalPaginas: Integer, registros: JList[Object]) {
   def this(lista: JList[_], pagina: Integer, registros: Long, totalRegistros: Long) =
-    this(
-      qtdRegistros = lista.size.toLong,
-      totalRegistros = totalRegistros,
-      paginaAtual = pagina,
+    this(qtdRegistros = lista.size.toLong, totalRegistros = totalRegistros, paginaAtual = pagina,
       totalPaginas = (totalRegistros / registros).toInt + (if(totalRegistros % registros != 0) 1 else 0),
-      registros = lista.asInstanceOf[JList[Object]]
-    )
-
+      registros = lista.asInstanceOf[JList[Object]])
 }
 abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
   private lazy final val CONST_MENSAGEM_ERRO_BUSCAR_PK = "Não foi possível realizar a pesquisa."
@@ -275,24 +257,20 @@ class DAOSimples {
       query }).get
   }
 }
-
 @Configuration
 @EnableTransactionManagement
 class ConfiguracaoSpringSimples
-
 object ContextoAplicacao {
   protected lazy val logger: Logger = Logger.getLogger(getClass)
   private var contexto: ApplicationContext = null
   var packageRaizProjeto: String = null
   var camadaRestInicializada = false
-
   def classesNaPackage = {
     val provider = new org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider(false)
     provider.addIncludeFilter(new org.springframework.core.`type`.filter.RegexPatternTypeFilter(java.util.regex.Pattern.compile(".*")))
     provider.findCandidateComponents(ContextoAplicacao.packageRaizProjeto).asScala.map(bean =>
       Class.forName(bean.asInstanceOf[org.springframework.beans.factory.config.BeanDefinition].getBeanClassName)).toList
   }
-
   def iniciar(
       ativarServidorWeb: JBoolean,
       portaWebApp: Integer,
@@ -397,7 +375,6 @@ object ContextoAplicacao {
   lazy val gson = (new com.google.gson.GsonBuilder).disableHtmlEscaping.setDateFormat(formatoData).serializeNulls.setPrettyPrinting.create
   lazy val sdf = new java.text.SimpleDateFormat(formatoData)
 }
-
 abstract class ActiveRecordJob extends org.quartz.Job {
   protected lazy val logger: Logger = Logger.getLogger(getClass)
   def executar
@@ -405,11 +382,10 @@ abstract class ActiveRecordJob extends org.quartz.Job {
   override def execute(context: org.quartz.JobExecutionContext): Unit = {
     logger.debug(s"Executando Job '${getClass.getSimpleName}'...")
     val tempo = JCalendar.getInstance.getTimeInMillis
-    executar
-    logger.debug(s"Fim da execução do Job '${getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos")
+    Try(executar).map(s => logger.debug(s"Fim da execução do Job '${getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos"))
+     .getOrElse(logger.error(s"Ocorreu um erro ao executar o Job '${getClass.getSimpleName}' em ${(JCalendar.getInstance.getTimeInMillis - tempo) / 1000d} segundos"))
   }
 }
-
 case class HBM2DDL(valor: String)
 object HBM2DDL {
   val NADA         = HBM2DDL("none")
@@ -418,7 +394,6 @@ object HBM2DDL {
   val DROPAR_CRIAR = HBM2DDL("create")
   val CRIAR_DROPAR = HBM2DDL("create-drop")
 }
-
 case class DriverDialeto(driver: String, dialeto: String)
 object DriverDialeto {
   val H2             = DriverDialeto("org.h2.Driver",                                "org.hibernate.dialect.H2Dialect")
