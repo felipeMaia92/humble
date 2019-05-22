@@ -116,6 +116,28 @@ case class RespostaFiltroRest(qtdRegistros: Long, totalRegistros: Long, paginaAt
       totalPaginas = (totalRegistros / registros).toInt + (if(totalRegistros % registros != 0) 1 else 0),
       registros = lista.asInstanceOf[JList[Object]])
 }
+object WebUIUtil {
+  def gerarWebUtils(activeRecordModel: Class[_], prefixoEndpoint: String): String = {
+    def getNomeModel = activeRecordModel.getSimpleName
+    s"""
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <link rel="stylesheet" href="/css/bootstrap.min.css">
+    <title>Ol&aacute; $getNomeModel!</title>
+  </head>
+  <body>
+    <h1>Este &eacute; um teste com a classe $getNomeModel</h1>
+    <p>Prefixo do endpoint: $prefixoEndpoint<p>
+  </body>
+  <script src="/js/jquery-3.3.1.slim.min.js"></script>
+  <script src="/js/popper.min.js"></script>
+  <script src="/js/bootstrap.min.js"></script>
+</html>
+"""}
+}
 abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M]) extends org.scalatra.ScalatraServlet {
   private lazy final val CONST_MENSAGEM_ERRO_BUSCAR_PK = "Não foi possível realizar a pesquisa."
   private lazy final val CONST_MENSAGEM_ERRO_SALVAR_INVALIDO = "Requisição inválida."
@@ -124,8 +146,9 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
   private lazy final val CONST_MENSAGEM_ERRO_APAGAR = "Ocorreu um erro ao apagar o registro."
   private lazy val PREFIXO_MAPEAMENTO_SERVLET = RestUtils.gerarPrefixoServletUrlDaClasse(getClass)
   lazy val logger = Logger.getLogger(getClass)
+  private def isRaizServlet = request.getRequestURI == PREFIXO_MAPEAMENTO_SERVLET
   before() {
-    contentType = if(request.getRequestURI == PREFIXO_MAPEAMENTO_SERVLET) "text/html" else "application/json"
+    contentType = if(isRaizServlet) "text/html" else "application/json"
   }
   private def erroRest(mensagem: String, ex: Option[Throwable] = None) =
     ContextoAplicacao.gson.toJson(ex match {
@@ -153,9 +176,8 @@ abstract class ActiveRecordRest[M <: ActiveRecordModel](implicit tag: ClassTag[M
       case None => throw new NenhumRegistroException
     }
   }
-  get("/") {
-    s"<h1>Olar ${tag.runtimeClass.getSimpleName}!</h1>"
-  }
+  private final lazy val HTML_WEB_UI = WebUIUtil.gerarWebUtils(tag.runtimeClass, PREFIXO_MAPEAMENTO_SERVLET)
+  get("/") { HTML_WEB_UI }
   get("/buscar/:pk") {
     Try(recuperarInstanciaDaPKStr) match {
       case Success(instancia: M) => Ok(instancia.json)
